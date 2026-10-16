@@ -1,0 +1,268 @@
+"""Human-approved actions. Nothing that changes data or sends a message runs
+until a person with the right role approves the preview.
+
+Action types
+  send_whatsapp         payload.items = [{student_id, name, phone, message}]
+  mark_instalment_paid  payload.items = [{instalment_id, student_name, amount, balance, due_date}]
+  apply_timetable       payload = timetable proposal from the planner
+"""
+import hashlib
+import json
+import re
+from datetime import date, datetime
+
+from . import audit, config, rbac, timetable
+
+MAX_ITEMS = 50
+
+
+class ActionError(Exception):
+    def __init__(self, message: str, status: int = 400):
+        super().__init__(message)
+        self.message, self.status = message, status
+
+
+# ---------------------------------------------------------------- helpers
+def _pretty(value):
+    if isinstance(value, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        return date.fromisoformat(value).strftime("%d %b %Y")
+    if isinstance(value, int) and value >= 1000:
+        return f"{value:,}"
+    return "" if value is None else str(value)
+
+
+def fill_template(template: str, row: dict) -> str:
+    lower = {k.lower(): v for k, v in row.items()}
+    return re.sub(r"\{(\w+)\}", lambda m: _pretty(lower[m.group(1).lower()])
+                  if m.group(1).lower() in lower else m.group(0), template)
+
+
+def _first(row: dict, *names):
+    lower = {k.lower(): v for k, v in row.items()}
+    for n in names:
+        if n in lower and lower[n] not in (None, ""):
+            return lower[n]
+    return None
+
+
+def _create(conn, user, action_type: str, title: str, payload: dict) -> dict:
+    cur = conn.execute(
+        "INSERT INTO pending_actions (created_at, created_by, action_type, title, payload_json, status) "
+        "VALUES (?,?,?,?,?, 'pending')",
+        (datetime.now().isoformat(timespec="seconds"), user["id"], action_type, title, json.dumps(payload)))
+    action_id = cur.lastrowid
+    audit.log(conn, user, "action_proposed", outcome="pending",
+              detail={"action_id": action_id, "action_type": action_type, "title": title,
+                      "items": len(payload.get("items", payload.get("changes", [])))}, commit=False)
+    conn.commit()
+    return get(conn, user, action_id)
+
+
+# ---------------------------------------------------------------- proposals
+def propose_messages(conn, user, rows: list[dict], template: str, title: str | None = None) -> dict:
+    if not rbac.can_do(user["role"], "send_whatsapp"):
+        raise ActionError(f"Your role ({user['role']}) cannot send messages.", 403)
+    items, skipped = [], []
+    for row in rows[:MAX_ITEMS]:
+        phone = _first(row, "phone", "student_phone", "mobile", "guardian_phone")
+        name = _first(row, "name", "student_name") or "Student"
+        if not phone:
+            skipped.append(name)
+            continue
+        items.append({"student_id": _first(row, "student_id", "id"), "name": name, "phone": phone,
+                      "message": fill_template(template, row)})
+    if not items:
+        raise ActionError("No recipients with a phone number were found, so there is nothing to send.")
+    payload = {"channel": "whatsapp", "template": template, "items": items, "skipped_no_phone": skipped,
+               "capped_at": MAX_ITEMS if len(rows) > MAX_ITEMS else None}
+    return _create(conn, user, "send_whatsapp", title or f"WhatsApp reminder to {len(items)} students", payload)
+
+
+def propose_mark_paid(conn, user, rows: list[dict], title: str | None = None) -> dict:
+    if not rbac.can_do(user["role"], "mark_instalment_paid"):
+        raise ActionError(f"Your role ({user['role']}) cannot change fee records.", 403)
+    items = []
+    for row in rows[:MAX_ITEMS]:
+        iid = _first(row, "instalment_id", "id")
+        if iid is None:
+            continue
+        inst = conn.execute("SELECT i.id, i.amount, i.paid_amount, i.status, i.due_date, s.name "
+                            "FROM instalments i JOIN fee_plans fp ON fp.id=i.fee_plan_id "
+                            "JOIN enrollments e ON e.id=fp.enrollment_id JOIN students s ON s.id=e.student_id "
+                            "WHERE i.id=?", (iid,)).fetchone()
+        if inst and inst["status"] != "paid":
+            items.append({"instalment_id": inst["id"], "student_name": inst["name"], "due_date": inst["due_date"],
+                          "amount": inst["amount"], "balance": inst["amount"] - inst["paid_amount"]})
+    if not items:
+        raise ActionError("No unpaid instalments matched, so there is nothing to mark as paid.")
+    return _create(conn, user, "mark_instalment_paid",
+                   title or f"Mark {len(items)} instalment(s) as paid", {"items": items, "method": "UPI"})
+
+
+def slots_fingerprint(slots: list[dict]) -> str:
+    key = sorted((s["batch_id"], s["trainer_id"], s["room_id"] or 0, s["day_of_week"], s["start_hour"])
+                 for s in slots)
+    return hashlib.sha1(json.dumps(key).encode()).hexdigest()[:12]
+
+
+def propose_timetable(conn, user, result: dict, title: str, leaves: list[dict] | None = None,
+                      new_batch: dict | None = None) -> dict:
+    if not rbac.can_do(user["role"], "apply_timetable"):
+        raise ActionError(f"Your role ({user['role']}) cannot change the timetable.", 403)
+    week_start = date.fromisoformat(result["week_start"])
+    payload = dict(result)
+    payload["base_fingerprint"] = slots_fingerprint(timetable.load_slots(conn, week_start))
+    payload["leaves"] = leaves or []
+    payload["new_batch"] = new_batch
+    return _create(conn, user, "apply_timetable", title, payload)
+
+
+# ---------------------------------------------------------------- reading
+def _row_to_action(r) -> dict:
+    d = dict(r)
+    d["payload"] = json.loads(d.pop("payload_json"))
+    d["result"] = json.loads(d.pop("result_json")) if d.get("result_json") else None
+    return d
+
+
+def list_actions(conn, user, status: str | None = None) -> list[dict]:
+    sql = ("SELECT a.*, u.display_name AS created_by_name FROM pending_actions a "
+           "JOIN users u ON u.id = a.created_by WHERE 1=1")
+    args: list = []
+    if user["role"] != "owner":
+        sql += " AND a.created_by = ?"
+        args.append(user["id"])
+    if status:
+        sql += " AND a.status = ?"
+        args.append(status)
+    sql += " ORDER BY a.id DESC LIMIT 100"
+    return [_row_to_action(r) for r in conn.execute(sql, args)]
+
+
+def get(conn, user, action_id: int) -> dict:
+    r = conn.execute("SELECT a.*, u.display_name AS created_by_name FROM pending_actions a "
+                     "JOIN users u ON u.id = a.created_by WHERE a.id=?", (action_id,)).fetchone()
+    if r is None or (user["role"] != "owner" and r["created_by"] != user["id"]):
+        raise ActionError("Action not found.", 404)
+    return _row_to_action(r)
+
+
+# ---------------------------------------------------------------- deciding
+def _decidable(conn, user, action_id: int) -> dict:
+    a = get(conn, user, action_id)
+    if a["status"] != "pending":
+        raise ActionError(f"This action is already {a['status']}.", 409)
+    if not rbac.can_do(user["role"], a["action_type"]):
+        raise ActionError(f"Your role ({user['role']}) cannot approve '{a['action_type']}'.", 403)
+    return a
+
+
+def reject(conn, user, action_id: int, reason: str | None = None) -> dict:
+    _decidable(conn, user, action_id)
+    conn.execute("UPDATE pending_actions SET status='rejected', decided_by=?, decided_at=?, result_json=? "
+                 "WHERE id=? AND status='pending'",
+                 (user["id"], datetime.now().isoformat(timespec="seconds"),
+                  json.dumps({"reason": reason or ""}), action_id))
+    audit.log(conn, user, "action_rejected", outcome="rejected",
+              detail={"action_id": action_id, "reason": reason}, commit=False)
+    conn.commit()
+    return get(conn, user, action_id)
+
+
+def approve(conn, user, action_id: int, edits: dict | None = None) -> dict:
+    a = _decidable(conn, user, action_id)
+    edits = edits or {}
+    now = datetime.now().isoformat(timespec="seconds")
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        # claim it first, so a double click can never run an action twice
+        claimed = conn.execute("UPDATE pending_actions SET status='approved', decided_by=?, decided_at=? "
+                               "WHERE id=? AND status='pending'", (user["id"], now, action_id)).rowcount
+        if not claimed:
+            raise ActionError("This action was already decided.", 409)
+        runner = {"send_whatsapp": _run_messages, "mark_instalment_paid": _run_mark_paid,
+                  "apply_timetable": _run_timetable}[a["action_type"]]
+        result = runner(conn, a, edits)
+        conn.execute("UPDATE pending_actions SET result_json=? WHERE id=?", (json.dumps(result), action_id))
+        audit.log(conn, user, "action_approved", outcome="executed",
+                  detail={"action_id": action_id, "action_type": a["action_type"], **result.get("summary", {})},
+                  commit=False)
+        conn.commit()
+    except ActionError:
+        conn.rollback()
+        raise
+    except Exception as e:
+        conn.rollback()
+        conn.execute("UPDATE pending_actions SET status='failed', decided_by=?, decided_at=?, result_json=? "
+                     "WHERE id=? AND status='pending'", (user["id"], now, json.dumps({"error": str(e)}), action_id))
+        audit.log(conn, user, "action_failed", outcome="failed", detail={"action_id": action_id, "error": str(e)})
+        raise ActionError(f"The action failed and nothing was changed: {e}", 500) from e
+    return get(conn, user, action_id)
+
+
+def _run_messages(conn, a: dict, edits: dict) -> dict:
+    exclude = {int(i) for i in edits.get("exclude", [])}
+    overrides = {int(k): v for k, v in (edits.get("items") or {}).items()}
+    sent = []
+    for i, item in enumerate(a["payload"]["items"]):
+        if i in exclude:
+            continue
+        body = (overrides.get(i) or {}).get("message", item["message"])
+        status = deliver_whatsapp(item["phone"], body)
+        conn.execute("INSERT INTO messages_outbox (action_id, channel, student_id, to_phone, body, status, created_at) "
+                     "VALUES (?,?,?,?,?,?,?)", (a["id"], "whatsapp", item.get("student_id"), item["phone"], body,
+                                                status, datetime.now().isoformat(timespec="seconds")))
+        sent.append({"name": item["name"], "phone": item["phone"], "status": status})
+    return {"sent": sent, "summary": {"messages": len(sent), "excluded": len(exclude)}}
+
+
+def deliver_whatsapp(phone: str, body: str) -> str:
+    """Plug a real provider in here (Twilio / Meta WhatsApp Cloud API / Gupshup).
+    For the demo, messages are recorded in messages_outbox as 'simulated'."""
+    return "simulated"
+
+
+def _run_mark_paid(conn, a: dict, edits: dict) -> dict:
+    method = edits.get("method") or a["payload"].get("method", "UPI")
+    if method not in ("UPI", "bank_transfer", "cash", "card"):
+        raise ActionError("method must be UPI, bank_transfer, cash or card.")
+    today = config.today().isoformat()
+    done = []
+    for item in a["payload"]["items"]:
+        inst = conn.execute("SELECT i.*, e.student_id FROM instalments i JOIN fee_plans fp ON fp.id=i.fee_plan_id "
+                            "JOIN enrollments e ON e.id=fp.enrollment_id WHERE i.id=?",
+                            (item["instalment_id"],)).fetchone()
+        if inst is None or inst["status"] == "paid":
+            continue
+        balance = inst["amount"] - inst["paid_amount"]
+        conn.execute("UPDATE instalments SET paid_amount=amount, status='paid', paid_on=? WHERE id=?",
+                     (today, inst["id"]))
+        conn.execute("INSERT INTO payments (instalment_id, student_id, amount, paid_on, method, reference) "
+                     "VALUES (?,?,?,?,?,?)", (inst["id"], inst["student_id"], balance, today, method,
+                                              f"APPROVED-ACTION-{a['id']}"))
+        done.append({"instalment_id": inst["id"], "student_name": item["student_name"], "amount": balance})
+    return {"marked_paid": done, "summary": {"instalments": len(done)}}
+
+
+def _run_timetable(conn, a: dict, edits: dict) -> dict:
+    p = a["payload"]
+    week_start = date.fromisoformat(p["week_start"])
+    if slots_fingerprint(timetable.load_slots(conn, week_start)) != p["base_fingerprint"]:
+        raise ActionError("The timetable changed after this preview was made. Please re-plan and approve the new preview.", 409)
+    new_id = None
+    if p.get("new_batch"):
+        nb = p["new_batch"]
+        course = conn.execute("SELECT id FROM courses WHERE code=?", (nb["course_code"],)).fetchone()
+        cur = conn.execute(
+            "INSERT INTO batches (code, course_id, trainer_id, mode, time_window, sessions_per_week, session_hours, "
+            "online_seat_limit, start_date, end_date, status) VALUES (?,?,?,?,?,?,?,?,?,?, 'active')",
+            (nb["code"], course["id"], nb["trainer_id"], nb["mode"], nb["time_window"], nb["sessions_per_week"],
+             nb.get("session_hours", 2), nb.get("online_seat_limit", 0), nb["start_date"], nb["end_date"]))
+        new_id = cur.lastrowid
+    for lv in p.get("leaves", []):
+        conn.execute("INSERT INTO trainer_leaves (trainer_id, leave_date, reason) VALUES (?,?,?)",
+                     (lv["trainer_id"], lv["leave_date"], lv.get("reason")))
+    slots = [dict(s, batch_id=new_id if s["batch_id"] < 0 else s["batch_id"]) for s in p["slots"]]
+    timetable.save_slots(conn, week_start, slots)
+    return {"applied_slots": len(slots), "new_batch_id": new_id,
+            "summary": {"changes": len(p.get("changes", [])), "slots": len(slots)}}
