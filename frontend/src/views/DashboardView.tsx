@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import { ArrowUpRight, CalendarDays, ClipboardCheck, GraduationCap, LayoutDashboard, RotateCcw, Sparkles, TriangleAlert, Users, Wallet, Zap } from 'lucide-react';
-import type { Dashboard } from '../types';
+import { ArrowUpRight, CalendarDays, ChevronDown, ChevronRight, ClipboardCheck, Copy, GraduationCap, LayoutDashboard, MessageCircle, RotateCcw, Sparkles, Sunrise, TriangleAlert, Users, Wallet, Zap } from 'lucide-react';
+import type { Brief, Dashboard } from '../types';
 import * as api from '../services/api';
 import type { ViewProps } from './common';
 
@@ -72,6 +72,7 @@ export function DashboardView({ me, onToast, onNavigate, askCopilot, refreshPend
     </div>
     {error && <div className="inline-error" role="alert">{error} <button className="text-button" onClick={load}>Try again</button></div>}
     {!d && !error && <div className="loading-row"><span className="live-pip" /> Loading today's numbers…</div>}
+    <MorningBrief askCopilot={askCopilot} onToast={onToast} refreshKey={d?.today ?? ''} />
     {d && <>
       <div className={`dash-tiles cols-${Math.min(tiles.length, tiles.length === 4 ? 4 : 3)}`}>
         {tiles.map((t) => <button key={t.label} className={`panel dash-tile ${t.onClick ? 'clickable' : ''}`} onClick={t.onClick} disabled={!t.onClick}>
@@ -84,7 +85,7 @@ export function DashboardView({ me, onToast, onNavigate, askCopilot, refreshPend
         <div className="panel dash-panel">
           <div className="panel-top"><div className="results-heading"><span className="results-icon"><CalendarDays size={16} /></span><div><b>{role === 'trainer' ? 'Your classes today' : "Today's classes"}</b><small>{(d.classes_today ?? []).length} SCHEDULED</small></div></div></div>
           {(d.classes_today ?? []).length === 0 ? <p className="dash-empty">No classes today.</p> : <ul className="dash-classes">
-            {(d.classes_today ?? []).map((c, i) => <li key={i}><span className="mono-cell">{api.hh(c.start_hour)}–{api.hh(c.end_hour)}</span><b>{c.batch_code}</b><span>{c.trainer_name}</span><span className="muted-cell">{c.room_name ?? 'Online'}{c.is_online && c.room_name ? ' + online' : ''}</span></li>)}
+            {(d.classes_today ?? []).map((c, i) => <li key={i}><span className="mono-cell">{api.hh(c.start_hour)}–{api.hh(c.end_hour)}</span><b>{c.batch_code}</b><span>{c.trainer_name}</span><span className="muted-cell">{c.room_name ?? 'Online'}{c.is_online && c.room_name ? ' + online' : ''}{c.trainer_on_leave ? ' · trainer on leave' : ''}</span></li>)}
           </ul>}
         </div>
         <div className="panel dash-panel">
@@ -95,4 +96,40 @@ export function DashboardView({ me, onToast, onNavigate, askCopilot, refreshPend
       </div>
     </>}
   </section>;
+}
+
+const BRIEF_KEY = 'ic_brief_open';
+
+// Today at a glance for this role (GET /api/brief): copy it, or send it to yourself on WhatsApp.
+function MorningBrief({ askCopilot, onToast, refreshKey }: { askCopilot: (q: string) => void; onToast: ViewProps['onToast']; refreshKey: string }) {
+  const [brief, setBrief] = useState<Brief | null>(null);
+  const [open, setOpen] = useState(() => { try { return localStorage.getItem(BRIEF_KEY) !== '0'; } catch { return true; } });
+  useEffect(() => { api.getBrief().then(setBrief).catch(() => setBrief(null)); }, [refreshKey]);
+  if (!brief) return null;
+  const toggle = () => setOpen((o) => { try { localStorage.setItem(BRIEF_KEY, o ? '0' : '1'); } catch { /* fine */ } return !o; });
+  async function copy() {
+    try { await navigator.clipboard.writeText(brief?.text ?? ''); onToast('Brief copied', 'success'); }
+    catch { onToast('Clipboard unavailable in this browser', 'warning'); }
+  }
+  const warn = brief.sections.filter((s) => s.tone === 'warn').length;
+  return <div className="panel brief-panel">
+    <div className="brief-top">
+      <button className="brief-toggle" onClick={toggle} aria-expanded={open}>
+        <span className="brief-icon"><Sunrise size={16} /></span>
+        <span><b>Morning brief</b><small>{brief.headline}{warn ? ` ${warn} thing(s) need attention.` : ' All calm.'}</small></span>
+        {open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+      </button>
+      <div className="brief-actions">
+        <button className="outline-action" onClick={() => void copy()}><Copy size={13} /> Copy</button>
+        <a className="outline-action brief-wa" href={`https://wa.me/?text=${encodeURIComponent(brief.text)}`} target="_blank" rel="noreferrer"><MessageCircle size={13} /> Send on WhatsApp</a>
+      </div>
+    </div>
+    {open && <div className="brief-grid">
+      {brief.sections.map((s) => <section key={s.key} className={`brief-card brief-${s.tone}`}>
+        <h4><i />{s.title}</h4>
+        <ul>{s.lines.map((l) => <li key={l}>{l}</li>)}</ul>
+        {s.ask && <button className="text-button brief-ask" onClick={() => askCopilot(s.ask as string)}>Ask the copilot <ArrowUpRight size={12} /></button>}
+      </section>)}
+    </div>}
+  </div>;
 }

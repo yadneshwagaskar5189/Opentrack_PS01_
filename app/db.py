@@ -76,6 +76,19 @@ def upgrade() -> None:
                 except ValueError:
                     pass
             conn.commit()
+        pay_cols = {r[1] for r in conn.execute("PRAGMA table_info(payments)")}
+        if pay_cols and "receipt_no" not in pay_cols:
+            conn.execute("ALTER TABLE payments ADD COLUMN receipt_no TEXT")
+            conn.commit()
+        audit_cols = {r[1] for r in conn.execute("PRAGMA table_info(audit_log)")}
+        if audit_cols and "hash" not in audit_cols:
+            conn.execute("ALTER TABLE audit_log ADD COLUMN prev_hash TEXT")
+            conn.execute("ALTER TABLE audit_log ADD COLUMN hash TEXT")
+            conn.commit()
+        if audit_cols:
+            from . import audit
+            audit.seal(conn)                                  # seal entries written before sealing existed
+            conn.commit()
         if cols:
             # views hold no data: rebuild them so new or changed views (e.g. v_schedule) appear
             for (name,) in conn.execute("SELECT name FROM sqlite_master WHERE type='view'").fetchall():

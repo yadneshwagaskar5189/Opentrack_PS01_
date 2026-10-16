@@ -1,6 +1,6 @@
 // Every call to the FastAPI backend lives here. The Vite dev server forwards /api to it.
 import type {
-  Action, AssignmentsInfo, AuditEntry, BatchRequest, CopilotQuestion, CopilotResponse, Course, Dashboard, EntryOptions, Health, Me,
+  Action, AssignmentsInfo, AuditEntry, AuditVerify, Brief, BatchRequest, CopilotQuestion, CopilotResponse, Course, Dashboard, EntryOptions, Health, Me,
   OpenInstalment, PlannerResult, Reconciliation, RiskReport, Role, Roster, Row, Timetable, Trainer, User,
 } from '../types';
 
@@ -80,6 +80,7 @@ export async function logout() {
 export const getMe = () => request<Me>('/me');
 export const getHealth = () => request<Health>('/health');
 export const getDashboard = () => request<Dashboard>('/dashboard');
+export const getBrief = () => request<Brief>('/brief');
 
 export const ask = (question: string, history: { question: string; sql: string }[]) =>
   request<CopilotResponse>('/copilot/ask', 'POST', { question, history });
@@ -119,7 +120,9 @@ export const proposeStudent = (spec: Record<string, unknown>) => request<Propose
 export const proposePayment = (spec: Record<string, unknown>) => request<Proposed>('/entry/payment', 'POST', spec).then((d) => d.action);
 export const proposeAttendance = (spec: Record<string, unknown>) => request<Proposed>('/entry/attendance', 'POST', spec).then((d) => d.action);
 export const proposeAssignment = (spec: Record<string, unknown>) => request<Proposed>('/entry/assignment', 'POST', spec).then((d) => d.action);
+export const proposeLeave = (spec: Record<string, unknown>) => request<Proposed>('/entry/leave', 'POST', spec).then((d) => d.action);
 
+export const verifyAudit = () => request<AuditVerify>('/audit/verify');
 export const getAudit = (limit = 200) => request<{ items: AuditEntry[] }>(`/audit?limit=${limit}`).then((d) => d.items);
 export const getAtRisk = (level: 'medium' | 'high' = 'medium') => request<RiskReport>(`/students/at-risk?level=${level}`);
 export const getStudents = () => request<{ items: Row[]; count: number }>('/students');
@@ -160,7 +163,7 @@ export function fmtDay(iso?: string | null) {
 }
 export const timeNow = () => new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
 
-const MONEY = /(amount|balance|fee|collected|revenue)/i;
+const MONEY = /(amount|balance|fee|collected|revenue|pending|overdue|per_emi|credit)/i;
 export function formatCell(col: string, value: string | number | null | undefined) {
   if (value === null || value === undefined || value === '') return '–';
   if (typeof value === 'number' && MONEY.test(col) && !/count|_no$|instalments/i.test(col)) return rupees(value);

@@ -3,7 +3,7 @@ import { ArrowDown, Check, Clock3, FilePenLine, GitCompareArrows, MessageCircle,
 import type { Action } from '../types';
 import * as api from '../services/api';
 import { Modal } from '../components/Feedback';
-import { ActionPreview, ChangeList, resultText, WaSendList } from '../components/ActionPreview';
+import { ActionPreview, ChangeList, ResultLinks, resultText, WaSendList } from '../components/ActionPreview';
 import { ACTION_LABEL, type ViewProps } from './common';
 
 const FILTERS = ['Pending', 'All', 'Approved', 'Rejected', 'Failed'] as const;
@@ -112,6 +112,7 @@ export function ApprovalsView({ me, onToast, refreshPending }: ViewProps) {
           </> : <span className="readonly-note"><ShieldCheck size={13} /> Your role can see this; only a role that may {ACTION_LABEL[a.action_type].toLowerCase()} can decide.</span>}</div>}
           {a.status === 'approved' && <div className="resolved-note"><Check size={12} /> {resultText(a)} <span>· Audit trail updated</span></div>}
           <WaSendList action={a} />
+          <ResultLinks action={a} />
           {a.status === 'rejected' && <div className="resolved-note"><X size={12} /> Rejected{(a.result as { reason?: string } | null)?.reason ? `: ${(a.result as { reason?: string }).reason}` : ''} <span>· Nothing was sent or changed</span></div>}
           {a.status === 'failed' && <div className="resolved-note"><X size={12} /> {String((a.result as { error?: string } | null)?.error ?? 'Failed')} <span>· Nothing was changed</span></div>}
         </article>;

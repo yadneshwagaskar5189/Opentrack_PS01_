@@ -4,7 +4,7 @@ Lists go through sql_guard with fixed SQL, so they obey exactly the same
 role rules as the copilot."""
 from datetime import timedelta
 
-from . import config, planner, risk, sql_guard
+from . import actions, config, planner, risk, sql_guard
 
 
 def _one(conn, sql, args=()):
@@ -15,7 +15,7 @@ def summary(conn, user: dict) -> dict:
     role = user["role"]
     today = config.today()
     ws, we = config.due_window()            # "this week" for fees: today + 6 days
-    pws, _ = config.plan_week()             # the timetable's week
+
     month_start = today.replace(day=1).isoformat()
     out: dict = {"role": role, "today": today.isoformat(), "week_start": ws.isoformat(), "week_end": we.isoformat()}
 
@@ -30,20 +30,21 @@ def summary(conn, user: dict) -> dict:
                 "collected_this_month": coll["amt"]}
 
     def pending():
-        if role == "owner":
-            return _one(conn, "SELECT COUNT(*) FROM pending_actions WHERE status='pending'")[0]
-        return _one(conn, "SELECT COUNT(*) FROM pending_actions WHERE status='pending' AND created_by=?",
-                    (user["id"],))[0]
+        return len(actions.list_actions(conn, user, "pending"))      # what this user can see in Approvals
 
     def classes_today(trainer_id=None):
-        sql = ("SELECT s.start_hour, s.end_hour, b.code AS batch_code, t.name AS trainer_name, r.name AS room_name, "
-               "s.is_online FROM timetable_slots s JOIN batches b ON b.id=s.batch_id JOIN trainers t ON t.id=s.trainer_id "
-               "LEFT JOIN rooms r ON r.id=s.room_id WHERE s.week_start=? AND s.day_of_week=?")
-        args = [pws.isoformat(), today.weekday()]
+        # today's real date (v_schedule), not the planning week (which is next week from Friday on)
+        sql = ("SELECT start_time, end_time, batch_code, trainer_name, room_name, mode, trainer_on_leave "
+               "FROM v_schedule WHERE class_date = ?")
+        args: list = [today.isoformat()]
         if trainer_id:
-            sql += " AND s.trainer_id=?"
+            sql += " AND trainer_id = ?"
             args.append(trainer_id)
-        return [dict(r) for r in conn.execute(sql + " ORDER BY s.start_hour", args)]
+        hours = lambda t: int(t[:2]) + int(t[3:5]) / 60                                  # noqa: E731
+        return [{"start_hour": hours(r["start_time"]), "end_hour": hours(r["end_time"]), "batch_code": r["batch_code"],
+                 "trainer_name": r["trainer_name"], "room_name": None if r["room_name"] == "Online" else r["room_name"],
+                 "is_online": 1 if r["mode"] in ("online", "hybrid") else 0, "trainer_on_leave": r["trainer_on_leave"]}
+                for r in conn.execute(sql + " ORDER BY start_time", args)]
 
     if role in ("owner", "counselor"):
         out["active_students"] = _one(conn, "SELECT COUNT(DISTINCT student_id) FROM enrollments WHERE status='active'")[0]

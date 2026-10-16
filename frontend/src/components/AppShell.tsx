@@ -21,7 +21,7 @@ const accessible: Record<Role, ViewId[]> = {
   owner: ['dashboard', 'copilot', 'approvals', 'timetable', 'risk', 'students', 'entry', 'reconciliation', 'audit'],
   counselor: ['dashboard', 'copilot', 'approvals', 'timetable', 'risk', 'students', 'entry', 'audit'],
   accounts: ['dashboard', 'copilot', 'approvals', 'students', 'entry', 'reconciliation', 'audit'],
-  trainer: ['dashboard', 'copilot', 'timetable', 'risk', 'students', 'entry', 'audit'],
+  trainer: ['dashboard', 'copilot', 'approvals', 'timetable', 'risk', 'students', 'entry', 'audit'],   // approvals: see your leave requests
 };
 
 export function allowedViews(role: Role) {

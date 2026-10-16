@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { ArrowRight, Check, ChevronDown, CircleAlert, MessageCircle, ShieldCheck, XCircle } from 'lucide-react';
+import { ArrowRight, Award, Check, ChevronDown, CircleAlert, FileText, MessageCircle, ShieldCheck, XCircle } from 'lucide-react';
 import type { Action, EntryPreview, Proposal } from '../types';
+import { ENTRY_TYPES } from '../types';
 import { approveAction, fmtDate, rejectAction, rupees } from '../services/api';
 import { ACTION_LABEL } from '../views/common';
 import type { ToastTone } from './Feedback';
@@ -24,7 +25,7 @@ export function ActionPreview({ action: initial, canDecide, onDecided, onToast, 
   const [reason, setReason] = useState('');
   const items = action.payload.items ?? [];
   const pending = action.status === 'pending';
-  const isEntry = Boolean(action.payload.preview);
+  const isEntry = ENTRY_TYPES.includes(action.action_type);          // typed-in data: confirm and save
   const included = items.length - excluded.length;
 
   async function approve() {
@@ -43,7 +44,9 @@ export function ActionPreview({ action: initial, canDecide, onDecided, onToast, 
       onDecided?.(updated);
       onToast(isEntry ? 'Saved · recorded in the audit log' :
         action.action_type === 'send_whatsapp' ? `${included} message(s) approved and logged` :
-        action.action_type === 'mark_instalment_paid' ? 'Instalment marked paid' : 'Timetable updated', 'success');
+        action.action_type === 'mark_instalment_paid' ? 'Instalment marked paid' :
+        action.action_type === 'issue_certificate' ? 'Certificates issued · recorded in the audit log' :
+        action.action_type === 'request_leave' ? 'Leave approved · recorded in the audit log' : 'Timetable updated', 'success');
     } catch (err) {
       onToast((err as Error).message, 'error');
     } finally {
@@ -125,6 +128,7 @@ export function ActionPreview({ action: initial, canDecide, onDecided, onToast, 
 
       {action.status === 'approved' && <div className="resolved-note"><Check size={12} /> {resultText(action)}</div>}
       {action.status === 'approved' && <WaSendList action={action} />}
+      {action.status === 'approved' && <ResultLinks action={action} />}
       {action.status === 'rejected' && <div className="resolved-note"><XCircle size={12} /> {isEntry ? 'Discarded. Nothing was saved.' : 'Rejected. Nothing was sent or changed.'}</div>}
       {action.status === 'failed' && <div className="resolved-note"><XCircle size={12} /> {String(action.result?.error ?? 'Failed. Nothing was changed.')}</div>}
 
@@ -132,7 +136,9 @@ export function ActionPreview({ action: initial, canDecide, onDecided, onToast, 
         <div className="approval-actions">
           <button className="approve-action" disabled={busy || (action.action_type === 'send_whatsapp' && included === 0)} onClick={() => void approve()}>
             <Check size={14} /> {busy ? 'Working…' : isEntry ? 'Confirm and save' : action.action_type === 'send_whatsapp' ? `Approve and send ${included}` :
-              action.action_type === 'mark_instalment_paid' ? 'Approve and mark paid' : 'Approve and apply'}
+              action.action_type === 'mark_instalment_paid' ? 'Approve and mark paid' :
+              action.action_type === 'issue_certificate' ? `Approve and issue ${items.length}` :
+              action.action_type === 'request_leave' ? 'Approve leave' : 'Approve and apply'}
           </button>
           <button className="reject-action" disabled={busy} onClick={() => setRejecting(true)}><XCircle size={14} /> {isEntry ? 'Discard' : 'Reject'}</button>
           {onOpenApprovals && <button className="text-button" onClick={onOpenApprovals}>Open in Approvals <ArrowRight size={12} /></button>}
@@ -190,6 +196,19 @@ export function EntryPreviewBody({ preview }: { preview: EntryPreview }) {
       )}
       {preview.checks.map((c) => <div key={c} className="entry-check"><Check size={12} /> {c}</div>)}
       {preview.warnings.map((w) => <div key={w} className="entry-warning"><CircleAlert size={12} /> {w}</div>)}
+    </div>
+  );
+}
+
+// Pages an approved action produced (certificates, receipts): each opens in a new tab, ready to print.
+export function ResultLinks({ action }: { action: Action }) {
+  const links = (action.result?.links as { label: string; url: string; kind?: string }[] | undefined) ?? [];
+  if (action.status !== 'approved' || !links.length) return null;
+  const Icon = action.action_type === 'issue_certificate' ? Award : FileText;
+  return (
+    <div className="result-links">
+      {links.map((l) => <a key={l.url} href={l.url} target="_blank" rel="noreferrer" className={`result-link ${l.kind === 'whatsapp' ? 'wa-send-button' : ''}`}>
+        {l.kind === 'whatsapp' ? <MessageCircle size={14} /> : <Icon size={14} />} {l.label}</a>)}
     </div>
   );
 }

@@ -18,4 +18,6 @@ export const ACTION_LABEL: Record<string, string> = {
   record_payment: 'Payment',
   mark_attendance: 'Attendance',
   save_assignment: 'Assignment & marks',
+  issue_certificate: 'Certificates',
+  request_leave: 'Leave request',
 };

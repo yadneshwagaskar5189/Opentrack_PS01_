@@ -6,8 +6,9 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from . import (actions, audit, auth, config, copilot, dashboard, db, entry, import_csv, planner, rbac, reconcile,
@@ -148,6 +149,13 @@ class AttendanceIn(BaseModel):
     records: list[dict[str, Any]] = Field(default_factory=list, examples=[[{"student_id": 1, "status": "absent"}]])
 
 
+class LeaveIn(BaseModel):
+    trainer_id: Optional[int] = None                     # owner only; a trainer always asks for themselves
+    start_date: str = Field(..., examples=["2026-10-21"])
+    end_date: Optional[str] = None
+    reason: Optional[str] = None
+
+
 class AssignmentIn(BaseModel):
     batch_code: str = Field(..., examples=["B01"])
     assignment_id: Optional[int] = None
@@ -263,6 +271,54 @@ def get_audit(limit: int = 100, event_type: Optional[str] = None, user=Depends(c
     return {"items": audit.list_entries(conn, user, limit, event_type)}
 
 
+@app.get("/api/audit/verify")
+def verify_audit(user=Depends(require("owner")), conn=Depends(get_db)):
+    """Check the audit log's seals: shows whether any entry was edited or deleted."""
+    out = audit.verify(conn)
+    audit.log(conn, user, "audit_verified", outcome="intact" if out["ok"] else "tampered",
+              detail={"entries": out["entries"], "problems": len(out["problems"])})
+    return out
+
+
+@app.get("/api/brief")
+def morning_brief(user=Depends(current_user), conn=Depends(get_db)):
+    """Today at a glance for this role, plus a WhatsApp-ready text version."""
+    from . import brief
+    return brief.build(conn, user)
+
+
+@app.get("/api/receipts/{number}/view", response_class=HTMLResponse)
+def view_receipt(number: str, sig: str = "", conn=Depends(get_db)):
+    """Printable fee receipt. The link carries a signature, so receipt numbers can't be guessed."""
+    from . import receipts
+    r = receipts.lookup(conn, number.strip().upper(), sig)
+    if not r:
+        return HTMLResponse("<h2 style='font-family:sans-serif'>This receipt link is not valid.</h2>", status_code=403)
+    return HTMLResponse(receipts.render(r))
+
+
+@app.get("/api/certificates/{number}")
+def verify_certificate(number: str, conn=Depends(get_db)):
+    """Public: anyone holding a certificate number can check it is genuine."""
+    from . import certificates
+    cert = certificates.lookup(conn, number.strip().upper())
+    if not cert:
+        raise HTTPException(404, "No certificate with this number was issued by this institute.")
+    return {k: cert[k] for k in ("valid", "certificate_no", "student_name", "course", "batch_code", "issued_on", "institute")}
+
+
+@app.get("/api/certificates/{number}/view", response_class=HTMLResponse)
+def view_certificate(number: str, request: Request, conn=Depends(get_db)):
+    """Public printable certificate (Print / Save as PDF in the browser)."""
+    from . import certificates
+    cert = certificates.lookup(conn, number.strip().upper())
+    if not cert:
+        return HTMLResponse("<h2 style='font-family:sans-serif'>No certificate with this number was issued here.</h2>",
+                            status_code=404)
+    verify = str(request.base_url).rstrip("/") + f"/api/certificates/{cert['certificate_no']}"
+    return HTMLResponse(certificates.render(cert, verify))
+
+
 @app.get("/api/timetable")
 def get_timetable(user=Depends(current_user), conn=Depends(get_db)):
     try:
@@ -374,6 +430,13 @@ def entry_attendance(body: AttendanceIn, user=Depends(current_user), conn=Depend
 @app.post("/api/entry/assignment")
 def entry_assignment(body: AssignmentIn, user=Depends(current_user), conn=Depends(get_db)):
     return _propose(entry.propose_assignment, conn, user, body)
+
+
+@app.post("/api/entry/leave")
+def entry_leave(body: LeaveIn, user=Depends(current_user), conn=Depends(get_db)):
+    """A trainer asks for leave (the owner may record it for any trainer). The owner approves it."""
+    from . import leave
+    return _propose(leave.propose, conn, user, body)
 
 
 @app.get("/api/dashboard")

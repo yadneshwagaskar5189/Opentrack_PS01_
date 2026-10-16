@@ -97,6 +97,20 @@ This isn't model training. For each question, the copilot puts the closest 4 che
 
 Dates such as "today's lectures" come from the `v_schedule` view (`t_my_schedule` for trainers). It has every class by date: classes already held, the planning week's timetable (including substitutes), and each batch's usual days for other dates. It also has a `trainer_on_leave` flag.
 
+### More features
+
+| Feature | Who | Where / how |
+|---|---|---|
+| **Parent alert after attendance** | trainer saves, counselor/owner approves | Save attendance with someone absent: a WhatsApp draft to each absent student's parent waits in **Approvals** |
+| **Tamper-proof audit log** | owner | **Audit log → Verify seals**. Each entry is sealed with an HMAC of its content plus the previous seal; the key is in `.audit_key` (or `AUDIT_KEY` in `.env`), outside the database. Editing or deleting an entry is reported. |
+| **Ask next** | everyone | 2–3 suggested next questions under each answer, only ones the role may ask (e.g. "Send a WhatsApp reminder for overdue EMIs") |
+| **Voice questions** | everyone | Mic button in the Copilot box, **EN / हिं / मरा**. Chrome/Edge, on `http://localhost` only (browsers block the microphone elsewhere) |
+| **Charts** | everyone | A bar chart above the results when an answer is "a number per thing" |
+| **Certificates** | counselor, owner | *"Issue certificates to eligible students"* → approve → numbered printable certificate (Print / Save as PDF). Rule, checked again at approval: course finished, attendance ≥ 75%, fees paid. Anyone can verify a number at `/api/certificates/<number>`. |
+| **Morning brief** | everyone | Top of the **Dashboard**: today's lectures, substitutes needed, students at risk, fees, collections, what's waiting. Copy or **Send on WhatsApp**. |
+| **Leave requests** | trainer asks, owner approves | **Add data → Leave** or *"I need leave on 2026-10-21 for …"*. After approval the leave is saved and a re-plan with substitutes is proposed for classes in the planning week. |
+| **Fee receipts** | accounts, owner | Every payment saved through an approval gets a receipt number, a printable receipt (signed link) and a **Send receipt on WhatsApp** button |
+
 ---
 
 ## 2. Demo script (`seed_data/demo_cases.csv`)
@@ -130,6 +144,11 @@ All endpoints are under `/api`. After login, send `Authorization: Bearer <token>
 | GET | `/dashboard` | – | role-specific numbers (see below) |
 | POST | `/copilot/ask` | `{question, history?}` | **copilot response** (below) |
 | GET | `/copilot/questions` | – | `{items: [{id, topic, question, explanation}]}`: the checked questions this role can ask |
+| GET | `/brief` | – | morning brief: `{headline, sections: [{title, lines, tone, ask}], text}` |
+| GET | `/audit/verify` | – | `{ok, entries, problems, message}`: checks the audit seals (owner) |
+| POST | `/entry/leave` | `{start_date, end_date?, reason?, trainer_id?}` | `{action}`: leave request (trainer for themselves, owner for anyone); the owner approves |
+| GET | `/certificates/{number}` · `/certificates/{number}/view` | – | public check of a certificate · printable certificate page |
+| GET | `/receipts/{number}/view?sig=…` | – | printable fee receipt (the link from the approval result) |
 | GET | `/actions?status=pending` | – | `{items: [action]}` |
 | GET | `/actions/{id}` | – | action |
 | POST | `/actions/{id}/approve` | `{edits?}` | action (status `approved`, `result`) |
@@ -226,6 +245,8 @@ The LLM is never trusted. Even if it is tricked into writing malicious SQL, four
 Plus a 3-second time limit (stops runaway queries) and a 200-row cap.
 Data changes only happen through **actions**: the LLM proposes, a human with the right role approves, the action is claimed atomically (a double click can't run it twice), and timetable previews are refused if the timetable changed after the preview was made.
 
+**Tamper-evident audit log.** Every audit entry is sealed with an HMAC-SHA256 of its content and the previous entry's seal. The key lives outside the database, so someone who edits `institute.db` directly can't re-seal it; *Verify seals* names the first broken entry.
+
 `tests/test_backend.py` runs 20 attack queries against the trainer role, including hidden sub-queries, `sqlite_master`, `pragma_table_info`, multiple statements and writes.
 
 ## 5. Timetable planner
@@ -255,6 +276,10 @@ app/
   llm.py         OpenAI-compatible client (stdlib only)
   mock_llm.py    offline stand-in for demos without a key
   question_bank.py  30 checked everyday questions: prompt examples + offline answers
+  brief.py       morning brief per role
+  certificates.py  issue / verify / printable certificates
+  leave.py       trainer leave requests -> owner approval -> re-plan proposal
+  receipts.py    fee receipt numbers, signed printable receipts
   whatsapp.py    delivery of approved messages (link buttons, Twilio, Meta)
   auth.py        PBKDF2 passwords, bearer tokens
   schema.sql     tables

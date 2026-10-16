@@ -173,3 +173,59 @@ def test_question_list_endpoint():
             counts[email] = len(items)
             assert all({"id", "topic", "question", "explanation"} <= set(i) for i in items)
         assert counts[OWNER] == 30 and counts[COUNSELOR] == 27 and counts[ACCOUNTS] == 14 and counts[RAHUL] == 14
+
+
+def test_follow_ups_are_role_aware():
+    acc = copilot.ask(user(ACCOUNTS), "Who has overdue fees?")
+    assert acc["follow_ups"][0] == question_bank.REMIND_OVERDUE
+    t = copilot.ask(user(RAHUL), "What are today's lectures?")
+    assert t["follow_ups"] and all(question_bank.sql_for(question_bank._BY_Q[f], "trainer") for f in t["follow_ups"])
+    c = copilot.ask(user(COUNSELOR), "todays lec timetable")
+    assert "Which trainer is taking today's lectures?" in c["follow_ups"]
+
+
+@pytest.mark.parametrize("sentence,status", [(question_bank.REMIND_OVERDUE, "overdue"),
+                                             (question_bank.REMIND_DUE, "due")])
+def test_reminder_follow_ups_make_one_message_per_student(sentence, status):
+    r = copilot.ask(user(ACCOUNTS), sentence)
+    assert r["type"] == "action_preview" and r["action"]["action_type"] == "send_whatsapp"
+    items = r["action"]["payload"]["items"]
+    assert items and len({i["phone"] for i in items}) == len(items)
+    assert ("since" in items[0]["message"]) == (status == "overdue")
+
+
+@pytest.mark.parametrize("question,first_col,rows", [
+    ("आज के लेक्चर कौन से हैं", "start_time", 2),           # Hindi: which lectures today
+    ("आज कौनसे सर का लेक्चर है", "trainer_name", 1),        # Hindi: which sir has a lecture today
+    ("फीस स्ट्रक्चर क्या है", "course_code", 7),             # Hindi: what is the fee structure
+    ("उद्याचे वेळापत्रक", "start_time", 2),                  # Marathi: tomorrow's timetable
+])
+def test_hindi_and_marathi_voice_questions(question, first_col, rows):
+    r = copilot.ask(user(OWNER), question)
+    assert r["type"] == "answer" and r["columns"][0] == first_col and r["row_count"] == rows
+
+
+def test_morning_brief_per_role():
+    from app import brief
+    conn = db.get_conn()
+    owner = brief.build(conn, user(OWNER))
+    keys = {s["key"] for s in owner["sections"]}
+    assert {"today", "leave", "fees", "collections", "waiting"} <= keys
+    today = next(s for s in owner["sections"] if s["key"] == "today")
+    assert today["lines"][0].startswith("09:00–11:00 B01 Java Full Stack · Rahul Deshmukh")
+    assert any("Sunita Joshi is on leave" in x for x in next(s for s in owner["sections"] if s["key"] == "leave")["lines"])
+    assert any("reconciliation" in x for x in next(s for s in owner["sections"] if s["key"] == "collections")["lines"])
+    assert "*Today's lectures*" in owner["text"]
+    acc = brief.build(conn, user(ACCOUNTS))
+    assert {s["key"] for s in acc["sections"]} == {"fees", "collections", "waiting"}          # no attendance, no timetable
+    tr = brief.build(conn, user(RAHUL))
+    tkeys = {s["key"] for s in tr["sections"]}
+    assert "fees" not in tkeys and "collections" not in tkeys and "recordings" in tkeys        # never fees for trainers
+    assert "₹" not in tr["text"]
+
+
+def test_dashboard_today_uses_real_date():
+    from app import dashboard
+    d = dashboard.summary(db.get_conn(), user(OWNER))
+    assert [c["batch_code"] for c in d["classes_today"]] == ["B01", "B02"]                   # Friday 16 Oct
+    assert d["classes_today"][0]["start_hour"] == 9

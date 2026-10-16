@@ -55,7 +55,8 @@ ROLES = {
             "messages_outbox", "audit_log",
         ],
         "actions": ["send_whatsapp", "mark_instalment_paid", "apply_timetable",
-                    "add_student", "record_payment", "mark_attendance", "save_assignment"],
+                    "add_student", "record_payment", "mark_attendance", "save_assignment", "issue_certificate",
+                    "request_leave"],
         "can_see_fees": True,
     },
     "counselor": {
@@ -65,7 +66,7 @@ ROLES = {
             "v_class_sessions", "v_attendance", "v_assignments", "v_submissions",
             "v_recordings", "v_instalments", "v_timetable", "v_schedule", "v_certificate_eligibility",
         ],
-        "actions": ["send_whatsapp", "add_student"],
+        "actions": ["send_whatsapp", "add_student", "issue_certificate"],
         "can_see_fees": True,
     },
     "accounts": {
@@ -89,6 +90,14 @@ ROLES = {
     },
 }
 
+# Actions a role may PROPOSE but never approve itself (a trainer asks for leave; the owner approves).
+PROPOSE_ONLY = {"trainer": ["request_leave"]}
+
+
+def can_propose(role: str, action_type: str) -> bool:
+    return can_do(role, action_type) or action_type in PROPOSE_ONLY.get(role, [])
+
+
 # What each role is NOT allowed to see, stated plainly for refusals.
 ROLE_RESTRICTIONS = {
     "owner": "Owners can see everything except login credentials.",
@@ -105,6 +114,10 @@ ACTION_DOCS = {
     "record_payment": "Record a fee payment against a student's EMI: amount, method, UTR/reference.",
     "mark_attendance": "Mark attendance for one class of a batch: everyone present unless named absent or late.",
     "save_assignment": "Create an assignment for a batch and/or enter students' scores (0-100).",
+    "request_leave": "Ask for trainer leave on dates (a trainer for themselves; the owner approves). "
+                     "Classes in the planning week then get a re-plan with substitutes.",
+    "issue_certificate": "Issue completion certificates. Needs a query on v_certificate_eligibility returning enrollment_id "
+                         "(eligible = 1 AND certificate_no IS NULL AND batch_status = 'completed').",
 }
 
 

@@ -184,7 +184,8 @@ CREATE TABLE payments (
     amount        INTEGER NOT NULL,
     paid_on       TEXT NOT NULL,
     method        TEXT NOT NULL CHECK (method IN ('UPI','bank_transfer','cash','card')),
-    reference     TEXT                                  -- UPI ref / UTR
+    reference     TEXT,                                 -- UPI ref / UTR
+    receipt_no    TEXT                                  -- set when the payment is saved through an approval
 );
 
 -- Bank statement lines, for fee reconciliation (owner and accounts only)
@@ -267,7 +268,9 @@ CREATE TABLE audit_log (
     question    TEXT,
     sql_text    TEXT,
     outcome     TEXT,
-    detail_json TEXT
+    detail_json TEXT,
+    prev_hash   TEXT,            -- seal of the entry before this one (tamper evidence, see audit.py)
+    hash        TEXT             -- HMAC of this entry + prev_hash, keyed by a secret kept outside the database
 );
 
 CREATE INDEX idx_att_student ON attendance(student_id);

@@ -14,6 +14,14 @@ from datetime import date, datetime
 from . import audit, config, rbac, timetable
 
 MAX_ITEMS = 50
+# Besides their own proposals, a role also sees these proposals from anyone, because it may read all the
+# data inside them (e.g. a parent alert made when a trainer saves attendance waits for a counselor).
+# Accounts staff can't read attendance, so they don't see other people's messages. The owner sees everything.
+SHARED_QUEUE = {"counselor": {"send_whatsapp", "issue_certificate"}}
+
+
+def _visible_types(role: str) -> list[str]:
+    return sorted(SHARED_QUEUE.get(role, set()) & set(rbac.ROLES.get(role, {}).get("actions", [])))
 
 
 class ActionError(Exception):
@@ -137,8 +145,9 @@ def list_actions(conn, user, status: str | None = None) -> list[dict]:
            "JOIN users u ON u.id = a.created_by WHERE 1=1")
     args: list = []
     if user["role"] != "owner":
-        sql += " AND a.created_by = ?"
-        args.append(user["id"])
+        shared = _visible_types(user["role"])
+        sql += f" AND (a.created_by = ? OR a.action_type IN ({','.join('?' * len(shared)) or 'NULL'}))"
+        args += [user["id"], *shared]
     if status:
         sql += " AND a.status = ?"
         args.append(status)
@@ -149,7 +158,8 @@ def list_actions(conn, user, status: str | None = None) -> list[dict]:
 def get(conn, user, action_id: int) -> dict:
     r = conn.execute("SELECT a.*, u.display_name AS created_by_name FROM pending_actions a "
                      "JOIN users u ON u.id = a.created_by WHERE a.id=?", (action_id,)).fetchone()
-    if r is None or (user["role"] != "owner" and r["created_by"] != user["id"]):
+    if r is None or (user["role"] != "owner" and r["created_by"] != user["id"]
+                     and r["action_type"] not in _visible_types(user["role"])):
         raise ActionError("Action not found.", 404)
     return _row_to_action(r)
 
@@ -187,9 +197,10 @@ def approve(conn, user, action_id: int, edits: dict | None = None) -> dict:
                                "WHERE id=? AND status='pending'", (user["id"], now, action_id)).rowcount
         if not claimed:
             raise ActionError("This action was already decided.", 409)
-        from . import entry                       # data typed in through forms or the copilot
+        from . import certificates, entry, leave  # data typed in through forms or the copilot
         runners = {"send_whatsapp": _run_messages, "mark_instalment_paid": _run_mark_paid,
-                   "apply_timetable": _run_timetable, **entry.RUNNERS}
+                   "apply_timetable": _run_timetable, "issue_certificate": certificates.run,
+                   "request_leave": leave.run, **entry.RUNNERS}
         entry.check_scope(conn, user, a)
         runner = runners[a["action_type"]]
         result = runner(conn, a, edits)
@@ -200,6 +211,10 @@ def approve(conn, user, action_id: int, edits: dict | None = None) -> dict:
         conn.commit()
         if a["action_type"] == "send_whatsapp":
             _deliver_queued(conn, user, action_id)   # network calls happen after the commit, never inside it
+        if a["action_type"] == "mark_attendance":
+            _follow_up(conn, user, action_id, entry.parent_alert)
+        if a["action_type"] == "request_leave":
+            _follow_up(conn, user, action_id, leave.replan)
     except ActionError:
         conn.rollback()
         raise
@@ -210,6 +225,23 @@ def approve(conn, user, action_id: int, edits: dict | None = None) -> dict:
         audit.log(conn, user, "action_failed", outcome="failed", detail={"action_id": action_id, "error": str(e)})
         raise ActionError(f"The action failed and nothing was changed: {e}", 500) from e
     return get(conn, user, action_id)
+
+
+def _follow_up(conn, user, action_id: int, make) -> None:
+    """After an approved action is saved, prepare the next step as a new preview (never sent by itself)."""
+    try:
+        nxt = make(conn, user, get(conn, user, action_id))
+    except ActionError as e:
+        audit.log(conn, user, "follow_up_skipped", outcome="skipped", detail={"action_id": action_id, "why": e.message})
+        return
+    if not nxt:
+        return
+    row = conn.execute("SELECT result_json FROM pending_actions WHERE id=?", (action_id,)).fetchone()
+    result = json.loads(row["result_json"] or "{}")
+    result["follow_up_action_id"] = nxt["action"]["id"]
+    result["message"] = (result.get("message", "Saved.") + " " + nxt["note"]).strip()
+    conn.execute("UPDATE pending_actions SET result_json=? WHERE id=?", (json.dumps(result), action_id))
+    conn.commit()
 
 
 def _run_messages(conn, a: dict, edits: dict) -> dict:
@@ -230,9 +262,10 @@ def _run_messages(conn, a: dict, edits: dict) -> dict:
 def _deliver_queued(conn, user, action_id: int) -> None:
     """Send the approved messages (really, or simulated: see app/whatsapp.py) and record each result."""
     from . import whatsapp
-    # trust is decided by the phone number itself: only a number staff typed in for a student is "real"
+    # trust is decided by the phone number itself: only a number staff typed in (student's or parent's) is "real"
     rows = conn.execute("SELECT o.id, o.to_phone, o.body, s.name, EXISTS (SELECT 1 FROM students t "
-                        "WHERE t.phone = o.to_phone AND t.real_contact = 1) AS real_contact FROM messages_outbox o "
+                        "WHERE (t.phone = o.to_phone OR t.guardian_phone = o.to_phone) AND t.real_contact = 1) "
+                        "AS real_contact FROM messages_outbox o "
                         "LEFT JOIN students s ON s.id = o.student_id WHERE o.action_id=? AND o.status='queued' "
                         "ORDER BY o.id", (action_id,)).fetchall()
     statuses, links = [], []
@@ -268,7 +301,7 @@ def _run_mark_paid(conn, a: dict, edits: dict) -> dict:
     if method not in ("UPI", "bank_transfer", "cash", "card"):
         raise ActionError("method must be UPI, bank_transfer, cash or card.")
     today = config.today().isoformat()
-    done = []
+    done, links = [], []
     for item in a["payload"]["items"]:
         inst = conn.execute("SELECT i.*, e.student_id FROM instalments i JOIN fee_plans fp ON fp.id=i.fee_plan_id "
                             "JOIN enrollments e ON e.id=fp.enrollment_id WHERE i.id=?",
@@ -278,11 +311,15 @@ def _run_mark_paid(conn, a: dict, edits: dict) -> dict:
         balance = inst["amount"] - inst["paid_amount"]
         conn.execute("UPDATE instalments SET paid_amount=amount, status='paid', paid_on=? WHERE id=?",
                      (today, inst["id"]))
-        conn.execute("INSERT INTO payments (instalment_id, student_id, amount, paid_on, method, reference) "
-                     "VALUES (?,?,?,?,?,?)", (inst["id"], inst["student_id"], balance, today, method,
-                                              f"APPROVED-ACTION-{a['id']}"))
-        done.append({"instalment_id": inst["id"], "student_name": item["student_name"], "amount": balance})
-    return {"marked_paid": done, "summary": {"instalments": len(done)}}
+        pid = conn.execute("INSERT INTO payments (instalment_id, student_id, amount, paid_on, method, reference) "
+                           "VALUES (?,?,?,?,?,?)", (inst["id"], inst["student_id"], balance, today, method,
+                                                    f"APPROVED-ACTION-{a['id']}")).lastrowid
+        from . import receipts
+        rc = receipts.issue(conn, pid)
+        links += rc["links"]
+        done.append({"instalment_id": inst["id"], "student_name": item["student_name"], "amount": balance,
+                     "receipt_no": rc["receipt_no"]})
+    return {"marked_paid": done, "links": links, "summary": {"instalments": len(done)}}
 
 
 def _run_timetable(conn, a: dict, edits: dict) -> dict:
@@ -311,8 +348,9 @@ def _run_timetable(conn, a: dict, edits: dict) -> dict:
              mine[0]["room_id"] if mine else None, nb["start_date"], nb["end_date"], status))
         new_id = cur.lastrowid
     for lv in p.get("leaves", []):
-        conn.execute("INSERT INTO trainer_leaves (trainer_id, leave_date, reason) VALUES (?,?,?)",
-                     (lv["trainer_id"], lv["leave_date"], lv.get("reason")))
+        conn.execute("INSERT INTO trainer_leaves (trainer_id, leave_date, reason) SELECT ?,?,? WHERE NOT EXISTS "
+                     "(SELECT 1 FROM trainer_leaves WHERE trainer_id=? AND leave_date=?)",
+                     (lv["trainer_id"], lv["leave_date"], lv.get("reason"), lv["trainer_id"], lv["leave_date"]))
     slots = [dict(s, batch_id=new_id if s["batch_id"] < 0 else s["batch_id"]) for s in p["slots"]]
     timetable.save_slots(conn, week_start, slots)
     return {"applied_slots": len(slots), "new_batch_id": new_id,

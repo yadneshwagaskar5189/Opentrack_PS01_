@@ -16,7 +16,7 @@ import re
 from datetime import date, datetime, timedelta
 from difflib import SequenceMatcher
 
-from . import config, rbac, timetable
+from . import config, db, rbac, timetable
 from .actions import ActionError, _create
 
 ENTRY_ACTIONS = ("add_student", "record_payment", "mark_attendance", "save_assignment")
@@ -155,7 +155,11 @@ def options(conn, user: dict) -> dict:
     if role == "trainer":                      # trainers see no fee or seat-business details
         for b in batches:
             b.pop("room_capacity", None)
+    if role in ("trainer", "owner"):                       # leave requests (see leave.py)
+        forms.append("request_leave")
     out = {"forms": forms, "today": config.today().isoformat(), "batches": batches}
+    if role == "owner":
+        out["trainers"] = [dict(r) for r in conn.execute("SELECT id, name FROM trainers ORDER BY name")]
     if "add_student" in forms:
         out["courses"] = [dict(r) for r in conn.execute(
             "SELECT code, name, total_fee, emi_count FROM courses ORDER BY code")]
@@ -426,9 +430,12 @@ def run_payment(conn, a: dict, edits: dict | None = None) -> dict:
     pid = conn.execute("INSERT INTO payments (instalment_id, student_id, amount, paid_on, method, reference) "
                        "VALUES (?,?,?,?,?,?)", (inst["id"], inst["student_id"], p["amount"], p["paid_on"],
                                                 p["method"], ref)).lastrowid
-    return {"payment_id": pid, "instalment_status": status,
-            "message": f"{_rupees(p['amount'])} recorded for {p['student_name']}; EMI {p['instalment_no']} is now {status}.",
-            "summary": {"payment_id": pid, "amount": p["amount"]}}
+    from . import receipts
+    rc = receipts.issue(conn, pid)
+    return {"payment_id": pid, "instalment_status": status, "receipt_no": rc["receipt_no"], "links": rc["links"],
+            "message": f"{_rupees(p['amount'])} recorded for {p['student_name']}; EMI {p['instalment_no']} is now {status}. "
+                       f"Receipt {rc['receipt_no']}.",
+            "summary": {"payment_id": pid, "amount": p["amount"], "receipt_no": rc["receipt_no"]}}
 
 
 # ---------------------------------------------------------------- 3. attendance
@@ -507,6 +514,40 @@ def run_attendance(conn, a: dict, edits: dict | None = None) -> dict:
     return {"session_id": sid, "message": f"Attendance saved for {p['batch_code']} on {p['date']}: "
                                           f"{len(p['records']) - absent} attended, {absent} absent.",
             "summary": {"session_id": sid, "students": len(p["records"])}}
+
+
+def parent_alert(conn, user: dict, a: dict) -> dict | None:
+    """After attendance is saved: a WhatsApp draft to the parents of absent students.
+    It is only a preview: a counselor or the owner approves it like any other message."""
+    p = a["payload"]
+    absent = [r["student_id"] for r in p["records"] if r["status"] == "absent"]
+    if not absent:
+        return None
+    rows = conn.execute(f"SELECT id, name, parent_name, guardian_phone FROM students WHERE id IN "
+                        f"({','.join('?' * len(absent))}) ORDER BY name", absent).fetchall()
+    course = conn.execute("SELECT c.name FROM batches b JOIN courses c ON c.id = b.course_id WHERE b.id=?",
+                          (p["batch_id"],)).fetchone()[0]
+    institute = db.institute_name(conn)
+    when = "today" if p["date"] == config.today().isoformat() else "on " + date.fromisoformat(p["date"]).strftime("%d %b")
+    items, skipped = [], []
+    for r in rows:
+        if not r["guardian_phone"]:
+            skipped.append(r["name"])
+            continue
+        parent = r["parent_name"] or f"Parent of {r['name']}"
+        items.append({"student_id": r["id"], "name": parent, "phone": r["guardian_phone"], "about": r["name"],
+                      "message": f"Namaste {parent}, this is {institute}. {r['name']} was absent from the {course} "
+                                 f"class ({p['batch_code']}) {when}. The class recording will be on the student portal. "
+                                 f"Please reply here if there is anything we should know. Thank you."})
+    if not items:
+        return None
+    payload = {"channel": "whatsapp", "audience": "parents", "template": None, "items": items,
+               "skipped_no_phone": skipped, "merged_duplicates": 0, "capped_at": None, "source_action_id": a["id"]}
+    nxt = _create(conn, user, "send_whatsapp",
+                          f"Absence alert to parents: {p['batch_code']}, {date.fromisoformat(p['date']).strftime('%d %b')}",
+                          payload)
+    return {"action": nxt, "note": f"A WhatsApp alert to {len(items)} parent(s) is waiting for approval "
+                                   f"(ACT-{nxt['id']}, counselor or owner)."}
 
 
 # ---------------------------------------------------------------- 4. assignments and marks

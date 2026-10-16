@@ -271,3 +271,129 @@ def test_upgrade_adds_real_contact_to_an_old_database():
     assert got["real_contact"] == 1
     assert conn.execute("SELECT COUNT(*) FROM students WHERE real_contact=1").fetchone()[0] == 1
     db.upgrade()                                                            # running it again changes nothing
+
+
+def test_absence_alert_to_parents_waits_for_a_counselor(monkeypatch):
+    monkeypatch.setattr(config, "WHATSAPP_PROVIDER", "link")
+    monkeypatch.setattr(config, "WHATSAPP_REDIRECT_TO", "+919822012345")
+    conn = db.get_conn()
+    a = entry.propose_attendance(conn, user(RAHUL), {"batch_code": "B01", "date": "2026-10-16",
+                                                     "absent": ["Aarav Sharma"]})
+    done = _approve(RAHUL, a)                                  # trainer saves attendance for their own batch
+    alert_id = done["result"]["follow_up_action_id"]
+    assert "waiting for approval" in done["result"]["message"]
+    rahul_view = actions.get(conn, user(RAHUL), alert_id)
+    item = rahul_view["payload"]["items"][0]
+    assert rahul_view["action_type"] == "send_whatsapp" and rahul_view["payload"]["audience"] == "parents"
+    assert item["about"] == "Aarav Sharma" and item["name"] == "Mr. Vijay Sharma" and "absent" in item["message"]
+    with pytest.raises(actions.ActionError):                    # the trainer can't send messages
+        actions.approve(conn, user(RAHUL), alert_id)
+    assert alert_id in [x["id"] for x in actions.list_actions(conn, user(COUNSELOR), "pending")]
+    sent = _approve(COUNSELOR, {"id": alert_id})["result"]["sent"]
+    assert sent[0]["wa_to"] == "+919822012345"                  # sample parent number: demo redirect
+    # nobody absent: no alert
+    b = entry.propose_attendance(conn, user(RAHUL), {"batch_code": "B02", "date": "2026-10-16", "absent": []})
+    assert "follow_up_action_id" not in _approve(RAHUL, b)["result"]
+
+
+def test_audit_log_is_sealed_and_tampering_is_found():
+    from app import audit
+    conn = db.get_conn()
+    copilot.ask(user(COUNSELOR), "Who has overdue fees?")
+    copilot.ask(user(OWNER), "What are today's lectures?")
+    ok = audit.verify(conn)
+    assert ok["ok"] and ok["entries"] >= 3
+    rid = conn.execute("SELECT id FROM audit_log WHERE question='Who has overdue fees?' ORDER BY id LIMIT 1").fetchone()[0]
+    conn.execute("UPDATE audit_log SET question='nothing to see here' WHERE id=?", (rid,))
+    conn.commit()
+    bad = audit.verify(conn)
+    assert not bad["ok"] and bad["problems"][0] == {"id": rid, "problem": "was changed after it was written"}
+    conn.execute("DELETE FROM audit_log WHERE id=?", (rid,))      # deleting it instead is caught too
+    conn.commit()
+    gone = audit.verify(conn)
+    assert not gone["ok"] and "deleted" in gone["problems"][0]["problem"]
+    import_csv.import_folder(SEED)                               # a fresh database starts a fresh chain
+    assert audit.verify(db.get_conn())["ok"]
+
+
+def test_issue_certificates_after_approval():
+    from app import certificates
+    conn = db.get_conn()
+    r = copilot.ask(user(COUNSELOR), "Issue certificates to eligible students")
+    assert r["type"] == "action_preview" and r["action"]["action_type"] == "issue_certificate"
+    names = sorted(i["student_name"] for i in r["action"]["payload"]["items"])
+    assert names == ["Anjali Mishra", "Deepak Rathod", "Ritu Bansal", "Sameer Kadam"]   # D12
+    done = _approve(COUNSELOR, r["action"])
+    issued = done["result"]["issued"]
+    assert len(issued) == 4 and all(certificates.NUMBER.match(x["certificate_no"]) for x in issued)
+    cert = certificates.lookup(conn, issued[0]["certificate_no"])
+    assert cert["valid"] and cert["student_name"] == issued[0]["name"] and cert["course"]
+    page = certificates.render(cert, "http://x/api/certificates/" + cert["certificate_no"])
+    assert "Certificate of Completion" in page and cert["student_name"] in page
+    assert certificates.lookup(conn, "BI-2026-0001-ZZZZ") is None and certificates.lookup(conn, "<script>") is None
+    again = copilot.ask(user(COUNSELOR), "Issue certificates to eligible students")      # nobody left to issue
+    assert again["type"] == "answer" and "No eligible students" in again["answer"]
+    assert copilot.ask(user(ACCOUNTS), "Issue certificates to eligible students")["type"] in ("refusal", "blocked")
+    assert copilot.ask(user(RAHUL), "Issue certificates to eligible students")["type"] in ("refusal", "blocked")
+
+
+def test_certificate_rechecked_at_approval():
+    conn = db.get_conn()
+    r = copilot.ask(user(OWNER), "Issue certificates to eligible students in B08")
+    eid = r["action"]["payload"]["items"][0]["enrollment_id"]
+    # fees fall due again before approval (e.g. a cheque bounced): that student must be skipped
+    fp = conn.execute("SELECT id FROM fee_plans WHERE enrollment_id=?", (eid,)).fetchone()[0]
+    conn.execute("UPDATE instalments SET paid_amount = 0, status = 'overdue' WHERE fee_plan_id=? AND instalment_no=1", (fp,))
+    conn.commit()
+    done = _approve(OWNER, r["action"])
+    assert len(done["result"]["issued"]) == 3 and len(done["result"]["skipped"]) == 1
+
+
+def test_trainer_leave_request_goes_to_owner_then_replans():
+    from app import leave
+    conn = db.get_conn()
+    rahul = user(RAHUL)
+    a = leave.propose(conn, rahul, {"start_date": "2026-10-21", "reason": "Medical appointment"})      # Wednesday
+    assert a["action_type"] == "request_leave" and a["status"] == "pending"
+    assert [r[2] for r in a["payload"]["preview"]["table"]["rows"]] == ["B01", "B02"]
+    with pytest.raises(actions.ActionError):                    # a trainer can't approve their own leave
+        actions.approve(conn, rahul, a["id"])
+    with pytest.raises(actions.ActionError):
+        leave.propose(conn, rahul, {"start_date": "2026-10-10"})                 # in the past
+    done = _approve(OWNER, a)
+    assert conn.execute("SELECT COUNT(*) FROM trainer_leaves WHERE trainer_id=1 AND leave_date='2026-10-21'").fetchone()[0] == 1
+    replan_id = done["result"]["follow_up_action_id"]
+    assert "re-plan with substitutes" in done["result"]["message"]
+    plan = actions.get(conn, user(OWNER), replan_id)
+    assert plan["action_type"] == "apply_timetable" and plan["status"] == "pending"
+    assert {c["batch_code"] for c in plan["payload"]["changes"]} >= {"B01"}
+    _approve(OWNER, {"id": replan_id})                          # applying it must not duplicate the leave row
+    assert conn.execute("SELECT COUNT(*) FROM trainer_leaves WHERE trainer_id=1 AND leave_date='2026-10-21'").fetchone()[0] == 1
+    with pytest.raises(actions.ActionError):                    # already on leave
+        leave.propose(conn, rahul, {"start_date": "2026-10-21"})
+
+
+def test_leave_by_copilot():
+    r = copilot.ask(user(RAHUL), "I need leave on 2026-10-29 for a family wedding")
+    assert r["type"] == "action_preview" and r["action"]["action_type"] == "request_leave"
+    assert r["action"]["payload"]["reason"] == "a family wedding"
+    assert copilot.ask(user(ACCOUNTS), "I need leave tomorrow")["type"] == "refusal"
+    later = copilot.ask(user(OWNER), "Meera is on leave on 2026-10-24 for a conference")
+    assert later["action"]["payload"]["trainer_name"] == "Meera Iyer"
+
+
+def test_payment_gets_a_signed_receipt():
+    from app import receipts
+    conn = db.get_conn()
+    a = entry.propose_payment(conn, user(ACCOUNTS), {"student_name": "Neha Verma", "amount": 6000, "method": "cash"})
+    done = _approve(ACCOUNTS, a)
+    no = done["result"]["receipt_no"]
+    assert no.startswith("RCPT-2026-") and "Receipt " + no in done["result"]["message"]
+    url = done["result"]["links"][0]["url"]
+    sig = url.split("sig=")[1]
+    r = receipts.lookup(conn, no, sig)
+    assert r and r["student_name"] == "Neha Verma" and r["amount"] == 6000
+    page = receipts.render(r)
+    assert "Six Thousand rupees only" in page and no in page
+    assert receipts.lookup(conn, no, "0" * 20) is None and receipts.lookup(conn, no, "") is None
+    assert receipts.in_words(123456) == "One Lakh Twenty Three Thousand Four Hundred Fifty Six"

@@ -1,9 +1,27 @@
 import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
-import { Activity, ArrowDown, ArrowUp, ArrowUpRight, Check, ChevronDown, ChevronRight, Clock3, Copy, Download, FileSearch, ListChecks, LockKeyhole, RefreshCw, Search, Send, ShieldAlert, ShieldCheck, Sparkles, Table2, TerminalSquare, TriangleAlert, Users, WandSparkles, Wallet } from 'lucide-react';
+
+// Browser speech recognition (Chrome, Edge): speak a question in English, Hindi or Marathi.
+type Recognizer = { lang: string; interimResults: boolean; maxAlternatives: number; start: () => void; stop: () => void;
+  onresult: ((e: { resultIndex: number; results: ArrayLike<ArrayLike<{ transcript: string }> & { isFinal: boolean }> }) => void) | null;
+  onerror: ((e: { error: string }) => void) | null; onend: (() => void) | null; onstart: (() => void) | null };
+const SpeechRec = (window as unknown as { SpeechRecognition?: new () => Recognizer; webkitSpeechRecognition?: new () => Recognizer }).SpeechRecognition
+  ?? (window as unknown as { webkitSpeechRecognition?: new () => Recognizer }).webkitSpeechRecognition;
+const VOICE_LANGS = [{ code: 'en-IN', label: 'EN', name: 'English' }, { code: 'hi-IN', label: 'हिं', name: 'Hindi' }, { code: 'mr-IN', label: 'मरा', name: 'Marathi' }];
+const VOICE_KEY = 'ic_voice_lang';
+const VOICE_ERRORS: Record<string, string> = {
+  'no-speech': "I didn't hear anything. Click the mic, wait for it to turn red, then speak.",
+  'audio-capture': 'No microphone found, or Windows is blocking it: Settings → Privacy & security → Microphone → allow desktop apps.',
+  'not-allowed': 'Microphone access is blocked. Click the microphone icon in the address bar, choose Allow, then reload the page.',
+  'service-not-allowed': 'The browser blocked speech recognition. Use Chrome or Edge at http://localhost.',
+  'network': "Voice needs internet (Chrome sends the audio to Google's speech service). Check the connection and try again.",
+  'language-not-supported': 'This voice language is not available here. Switch the language button to EN.',
+};
+import { Activity, ArrowDown, ArrowUp, ArrowUpRight, Check, ChevronDown, ChevronRight, Clock3, Copy, Download, FileSearch, ListChecks, LockKeyhole, Mic, RefreshCw, Search, Send, ShieldAlert, ShieldCheck, Sparkles, Table2, TerminalSquare, TriangleAlert, Users, WandSparkles, Wallet } from 'lucide-react';
 import * as api from '../services/api';
 import type { CopilotQuestion, CopilotResponse, Dashboard, Health, Role, Row } from '../types';
 import { ActionPreview, ChangeList } from '../components/ActionPreview';
 import { Modal } from '../components/Feedback';
+import { AnswerChart } from '../components/AnswerChart';
 import type { ViewProps } from './common';
 
 const JAVA_Q = 'Which students in the Java batch have missed three or more classes and have an EMI due this week? Draft a WhatsApp reminder for each.';
@@ -52,6 +70,10 @@ export function CopilotView({ me, health, onToast, onNavigate, refreshPending, m
   const [questions, setQuestions] = useState<CopilotQuestion[]>([]);
   const [bankOpen, setBankOpen] = useState(false);
   const [bankFilter, setBankFilter] = useState('');
+  const [listening, setListening] = useState(false);
+  const [voiceLang, setVoiceLang] = useState(() => { try { return localStorage.getItem(VOICE_KEY) || 'en-IN'; } catch { return 'en-IN'; } });
+  const recRef = useRef<Recognizer | null>(null);
+  const submitRef = useRef<(q: string) => void>(() => undefined);
 
   useEffect(() => { api.getDashboard().then(setSnapshot).catch(() => undefined); }, [messages.length]);
   useEffect(() => { api.getQuestions().then(setQuestions).catch(() => undefined); }, []);
@@ -94,6 +116,47 @@ export function CopilotView({ me, health, onToast, onNavigate, refreshPending, m
     } finally {
       setLoading(false);
     }
+  }
+
+  submitRef.current = (q: string) => { void submit(q); };
+
+  function startVoice() {
+    if (!SpeechRec) { onToast('Voice questions need Chrome or Edge.', 'warning'); return; }
+    if (!window.isSecureContext) { onToast(`The browser only allows the microphone on http://localhost. Open http://localhost:${window.location.port || '5173'} on this laptop to use voice.`, 'warning'); return; }
+    const rec = new SpeechRec();
+    rec.lang = voiceLang; rec.interimResults = true; rec.maxAlternatives = 1;
+    let said = '';
+    rec.onresult = (e) => {
+      let interim = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const t = e.results[i][0].transcript;
+        if (e.results[i].isFinal) said += t; else interim += t;
+      }
+      setQuery(`${said}${interim}`.trim());
+    };
+    let failed = false;
+    rec.onstart = () => { setListening(true); onToast('Listening… speak now. It sends when you stop talking.', 'info'); };
+    rec.onerror = (e) => {
+      failed = true;
+      setListening(false);
+      if (e.error !== 'aborted') onToast(VOICE_ERRORS[e.error] ?? `Voice input stopped: ${e.error}`, 'warning');
+    };
+    rec.onend = () => {
+      setListening(false); recRef.current = null;
+      if (said.trim()) submitRef.current(said.trim());
+      else if (!failed) onToast("I didn't catch that. Click the mic and try again.", 'info');
+    };
+    recRef.current = rec;
+    try { rec.start(); setListening(true); }
+    catch (err) { setListening(false); onToast(`Couldn't start the microphone: ${(err as Error).message}`, 'warning'); }
+  }
+  function stopVoice() { recRef.current?.stop(); }
+  function nextVoiceLang() {
+    const i = VOICE_LANGS.findIndex((l) => l.code === voiceLang);
+    const next = VOICE_LANGS[(i + 1) % VOICE_LANGS.length];
+    setVoiceLang(next.code);
+    try { localStorage.setItem(VOICE_KEY, next.code); } catch { /* not saved: fine */ }
+    onToast(`Voice language: ${next.name}`, 'info');
   }
 
   async function tryToBreakIt() {
@@ -163,12 +226,13 @@ export function CopilotView({ me, health, onToast, onNavigate, refreshPending, m
               </div>
               {m.res && <ResponseExtras res={m.res} role={role} canDecide={Boolean(m.res.action && me.allowed_actions.includes(m.res.action.action_type))}
                                          onToast={onToast} onDecided={refreshPending} onOpenApprovals={() => onNavigate('approvals')} />}
+              {m.from === 'assistant' && i === messages.length - 1 && !loading && (m.res?.follow_ups?.length ?? 0) > 0 && <div className="next-questions"><span>ASK NEXT</span>{m.res?.follow_ups?.map((f) => <button key={f} onClick={() => void submit(f)}>{f}<ArrowUpRight size={12} /></button>)}</div>}
             </div>)}
             {loading && <div className="message-row assistant"><span className="message-avatar"><Sparkles size={13} /></span><div className="thinking-bubble"><i /><i /><i /><span>Checking institute records…</span></div></div>}
             <div ref={endRef} />
           </div>
           <div className="suggestion-row"><span className="suggestion-label">TRY ASKING</span>{questions.length > 0 && <button className="prompt-chip qbank-chip" onClick={() => setBankOpen(true)} disabled={loading}><ListChecks size={12} /> All {questions.length} questions</button>}{PROMPTS[role].map((p) => <button key={p} className="prompt-chip" onClick={() => void submit(p)} disabled={loading} title={p}>{p.length > 62 ? `${p.slice(0, 60)}…` : p}<ArrowUpRight size={12} /></button>)}</div>
-          <form className="composer" onSubmit={(e) => { e.preventDefault(); void submit(); }}><span className="composer-icon"><WandSparkles size={15} /></span><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Ask about students, fees, attendance, the timetable…" aria-label="Ask Institute Copilot" /><kbd>↵</kbd><button className="send-button" type="submit" disabled={!query.trim() || loading} aria-label="Send question"><Send size={15} /></button></form>
+          <form className="composer" onSubmit={(e) => { e.preventDefault(); void submit(); }}><span className="composer-icon"><WandSparkles size={15} /></span><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={listening ? 'Listening… speak your question' : 'Ask about students, fees, attendance, the timetable…'} aria-label="Ask Institute Copilot" />{SpeechRec && <><button type="button" className="voice-lang" onClick={nextVoiceLang} title="Voice language (click to change)" disabled={listening}>{VOICE_LANGS.find((l) => l.code === voiceLang)?.label ?? 'EN'}</button><button type="button" className={`mic-button ${listening ? 'listening' : ''}`} onClick={listening ? stopVoice : startVoice} disabled={loading} aria-label={listening ? 'Stop listening' : 'Ask by voice'} title={listening ? 'Stop listening' : 'Ask by voice'}><Mic size={15} /></button></>}<kbd>↵</kbd><button className="send-button" type="submit" disabled={!query.trim() || loading} aria-label="Send question"><Send size={15} /></button></form>
           <div className="composer-foot"><span><LockKeyhole size={11} /> Read-only copilot · your role decides what it can read</span><button className="refusal-trigger" onClick={() => void tryToBreakIt()} disabled={loading}><ShieldAlert size={12} /> Try to break it (raw SQL, no AI)</button></div>
         </div>
 
@@ -178,6 +242,7 @@ export function CopilotView({ me, health, onToast, onNavigate, refreshPending, m
           </div>
           {latestResult ? <>
             <div className="table-summary"><span><span className="summary-mark" /> {latestResult.answer}</span></div>
+            <AnswerChart columns={columns} rows={rows} />
             <div className="data-table-wrap"><table className="data-table"><thead><tr>{columns.map((c) => <th key={c}><button onClick={() => toggleSort(c)}>{api.prettyCol(c)}<span className="sort-mark">{sort?.key === c ? sort.direction === 'asc' ? <ArrowUp size={11} /> : <ArrowDown size={11} /> : <ChevronDown size={10} />}</span></button></th>)}</tr></thead>
               <tbody>{rows.map((r, i) => <tr key={i}>{columns.map((c) => <td key={c}><Cell col={c} row={r} /></td>)}</tr>)}</tbody></table></div>
             <div className="table-foot"><span>{latestResult.truncated ? 'Showing the first 200 rows' : `${latestResult.row_count} row(s)`} <span className="table-foot-dot">·</span> {latestResult.explanation ?? 'Read-only query'}</span><span className="read-only-pill"><LockKeyhole size={11} /> READ ONLY</span></div>

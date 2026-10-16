@@ -248,6 +248,48 @@ BANK: list[dict] = [
 
 assert len(BANK) == 30, len(BANK)
 
+# What people usually ask next. Sentences in ACTION_NEXT prepare an approval preview (role-checked).
+REMIND_OVERDUE = "Send a WhatsApp reminder for overdue EMIs"
+REMIND_DUE = "Send a WhatsApp reminder for EMIs due this week"
+ISSUE_CERTS = "Issue certificates to eligible students"
+ACTION_NEXT = {REMIND_OVERDUE: "send_whatsapp", REMIND_DUE: "send_whatsapp", ISSUE_CERTS: "issue_certificate"}
+NEXT = {
+    "fee_structure": ["What is the fee for Java Full Stack and how many EMIs?", "Which EMIs are due this week?",
+                      "How much fee is still pending in each batch?"],
+    "fee_one_course": ["What is the total fee structure?", "Which EMIs are due this week?"],
+    "emi_due_week": [REMIND_DUE, "Who has overdue fees?", "How much fee did we collect this month?"],
+    "overdue": [REMIND_OVERDUE, "How much fee is still pending in each batch?", "Which bank credits don't match any payment?"],
+    "pending_by_batch": ["Who has overdue fees?", "Which EMIs are due this week?"],
+    "collected_month": ["Which bank credits don't match any payment?", "Who has overdue fees?"],
+    "student_fee": ["Who has overdue fees?", REMIND_OVERDUE],
+    "bank_unmatched": ["How much fee did we collect this month?", "Who has overdue fees?"],
+    "today_lectures": ["Which trainer is taking today's lectures?", "Which classes are affected by trainer leave?",
+                       "What is tomorrow's timetable?"],
+    "today_trainers": ["Which classes are affected by trainer leave?", "What is tomorrow's timetable?",
+                       "Which room is free today at 6 pm?"],
+    "today_course_time": ["What are today's lectures?", "What is tomorrow's timetable?"],
+    "tomorrow": ["Show all lectures in the next 7 days", "Which classes are affected by trainer leave?"],
+    "week_lectures": ["Is any trainer double-booked this week?", "Which classes are affected by trainer leave?"],
+    "next_week": ["Is any trainer double-booked this week?", "Which classes are affected by trainer leave?"],
+    "trainer_batches": ["Which trainer teaches which batch?", "What are today's lectures?"],
+    "who_teaches": ["Which trainer is taking today's lectures?", "How many students are in each batch?"],
+    "leave_affected": ["Is any trainer double-booked this week?", "Show next week's timetable"],
+    "double_booked": ["Which classes are affected by trainer leave?", "Show next week's timetable"],
+    "free_room": ["What are today's lectures?"],
+    "students_per_batch": ["How many online seats are left in each batch?", "Which students have attendance below 75%?"],
+    "online_seats": ["How many students are in each batch?", "Which new batches are starting soon?"],
+    "student_details": ["Which students have attendance below 75%?"],
+    "upcoming_batches": ["How many online seats are left in each batch?"],
+    "yesterday_attendance": ["Which students have attendance below 75%?", "Who was absent in the last class of B02?"],
+    "last_class_absent": ["Which students have attendance below 75%?", "What was yesterday's attendance?"],
+    "low_attendance": [D01, "Who is eligible for a certificate?"],
+    "missing_submission": ["Which classes are missing a recording?", "Which students have attendance below 75%?"],
+    "missing_recordings": ["Who has not submitted the latest assignment in B01?"],
+    "certificates": [ISSUE_CERTS, "Which students have attendance below 75%?"],
+    "d01_reminder": ["Who has overdue fees?", "Which students have attendance below 75%?"],
+}
+_BY_Q = {e["q"]: e for e in BANK}
+
 
 # ---------------------------------------------------------------- dates
 def dates() -> dict:
@@ -301,32 +343,38 @@ def plan_for(entry: dict, role: str, institute: str = "the institute") -> dict |
 
 
 # ---------------------------------------------------------------- finding the closest questions
-SYNONYMS = {
-    "class": "lecture lectures lec lecs class classes session sessions period periods",
-    "trainer": "trainer trainers sir sirs madam maam mam teacher teachers faculty mentor tutor",
-    "fee": "fee fees",
-    "emi": "emi emis instalment instalments installment installments kisht",
-    "today": "today todays aaj",
-    "tomorrow": "tomorrow tomorrows kal",
-    "yesterday": "yesterday yesterdays",
-    "schedule": "timetable timetables schedule schedules routine",
-    "time": "time timing timings when baje",
-    "absent": "absent absentees absence missed miss",
-    "student": "student students learner learners",
-    "week": "week weekly hafte hafta",
-    "paid": "paid pay payment payments collected collection received",
-    "overdue": "overdue defaulter defaulters late",
-    "room": "room rooms lab labs classroom classrooms hall",
+SYNONYMS = {    # English, Hinglish, Hindi and Marathi words (voice questions arrive in Devanagari)
+    "class": "lecture lectures lec lecs class classes session sessions period periods "
+             "लेक्चर लेक्चर्स क्लास कक्षा तास तासिका वर्ग",
+    "trainer": "trainer trainers sir sirs madam maam mam teacher teachers faculty mentor tutor "
+               "सर मॅडम मैडम शिक्षक टीचर फैकल्टी",
+    "fee": "fee fees फीस फी शुल्क",
+    "structure": "structure स्ट्रक्चर रचना",
+    "emi": "emi emis instalment instalments installment installments kisht ईएमआई हप्ता हप्ते किश्त",
+    "today": "today todays aaj आज आजचे आजच्या आजचा",
+    "tomorrow": "tomorrow tomorrows kal कल उद्या उद्याचे उद्याच्या",
+    "yesterday": "yesterday yesterdays काल",
+    "schedule": "timetable timetables schedule schedules routine टाइमटेबल वेळापत्रक शेड्यूल",
+    "time": "time timing timings when baje समय वेळ बजे वाजता",
+    "absent": "absent absentees absence missed miss गैरहाजिर अनुपस्थित गैरहजर",
+    "student": "student students learner learners विद्यार्थी छात्र स्टूडेंट",
+    "week": "week weekly hafte hafta हफ्ते हफ्ता आठवडा आठवड्यात",
+    "paid": "paid pay payment payments collected collection received भुगतान जमा",
+    "overdue": "overdue defaulter defaulters late बकाया थकबाकी",
+    "room": "room rooms lab labs classroom classrooms hall रूम कमरा खोली",
 }
 _SYN = {w: k for k, words in SYNONYMS.items() for w in words.split()}
 STOP = set("""a an the is are was were be of for in on at to me my our we us you your i it its this that these those
 what which who whom whose how much many do does did show give tell list get find please all any some there here and or
-with by from about can could would should will kya hai hain ka ke ki ko se ye wo kaun kaunse kaunsa batao bata dikhao""".split())
+with by from about can could would should will kya hai hain ka ke ki ko se ye wo kaun kaunse kaunsa batao bata dikhao
+है हैं के की का को क्या कौन कौनसे कौनसा कौनसी कौनसे से में कितने कितनी कितना मेरे मेरा मेरी बताओ बताइए दिखाओ
+आहे आहेत कोणते कोणता कोणती कोण चे ची चा च्या ला ना किती सांगा दाखवा माझे माझी""".split())
+_TOKEN = re.compile(r"[^\s.,!?;:'\"()\[\]{}/\\|\-–—]+")
 
 
 def _words(text: str) -> set[str]:
     out = set()
-    for w in re.findall(r"[a-z0-9]+", (text or "").lower().replace("'s", "")):
+    for w in _TOKEN.findall((text or "").lower().replace("'s", "").replace("’s", "")):
         if w in STOP or len(w) < 2:
             continue
         out.add(_SYN.get(w, w))
@@ -377,3 +425,23 @@ def match(question: str, role: str, threshold: float = 0.7) -> dict | None:
             if sc > best:
                 best, best_entry = sc, e
     return best_entry if best[0] >= threshold and best[1] >= 0.75 else None
+
+
+def follow_ups(question: str, role: str, limit: int = 3) -> list[str]:
+    """Up to `limit` natural next questions after this one, all of them allowed for this role."""
+    entry = match(question, role, threshold=0.6)
+    if entry is None:
+        best = closest(question, role, 1)
+        entry = best[0][1] if best and best[0][0] >= 0.5 else None
+    if entry is None:
+        return []
+    asked = _words(question)
+    out = []
+    for text in NEXT.get(entry["id"], []):
+        if text in ACTION_NEXT:
+            ok = rbac.can_do(role, ACTION_NEXT[text])
+        else:
+            ok = text in _BY_Q and sql_for(_BY_Q[text], role) is not None
+        if ok and _words(text) != asked:
+            out.append(text)
+    return out[:limit]

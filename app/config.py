@@ -50,6 +50,9 @@ ONLINE_LICENCES = int(os.getenv("ONLINE_LICENCES", "2"))
 CORS_ORIGINS = [o.strip() for o in os.getenv(
     "CORS_ORIGINS", "http://localhost:5173,http://localhost:3000").split(",") if o.strip()]
 
+# Secret that seals the audit log (tamper evidence). Empty = a random key kept in .audit_key next to .env.
+AUDIT_KEY = os.getenv("AUDIT_KEY", "").strip()
+
 # Freeze "today" for a stable demo, e.g. DEMO_TODAY=2026-10-16. Empty = real date.
 DEMO_TODAY = os.getenv("DEMO_TODAY", "").strip()
 

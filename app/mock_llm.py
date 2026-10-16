@@ -52,9 +52,36 @@ ORDER BY classes_missed DESC"""
         return {"type": "query", "sql": sql,
                 "explanation": f"Students who missed {n}+ classes and have an unpaid EMI due this week."}
 
+    if re.search(r"remind|reminder|whatsapp|message", q) and re.search(r"overdue|due this week|emis? due", q):
+        overdue = "overdue" in q
+        where = (f"status IN ('overdue', 'partial') AND due_date < '{today}'" if overdue
+                 else f"status != 'paid' AND due_date BETWEEN '{ws}' AND '{we}'")
+        return {"type": "action", "action_type": "send_whatsapp",
+                "title": "Overdue EMI reminder" if overdue else "EMI due this week reminder",
+                "sql": "SELECT student_id, student_name AS name, student_phone AS phone, batch_code, "
+                       "MIN(due_date) AS due_date, SUM(balance) AS amount_due FROM v_instalments "
+                       f"WHERE {where} GROUP BY student_id ORDER BY amount_due DESC",
+                "message_template": ("Hi {name}, a gentle reminder from " + institute + ": ₹{amount_due} of your fees for "
+                                     "{batch_code} " + ("has been due since {due_date}" if overdue else "is due on {due_date}")
+                                     + ". Please pay at your earliest convenience, or reply here if you need help. Thank you!"),
+                "explanation": ("Students with overdue EMIs" if overdue else "Students with an EMI due this week")
+                               + ", one message each with the total amount."}
+
+    leave_plan = _leave_plan(question, q, user, context)
+    if leave_plan:
+        return leave_plan
+
     entry_plan = _entry_plan(question, q, codes, today)
     if entry_plan:
         return entry_plan
+
+    if re.search(r"\b(issue|generate|give|make|create|print|prepare)\b", q) and "certificate" in q:
+        where = f" AND batch_code IN ({', '.join(repr(c) for c in codes)})" if codes else ""
+        return {"type": "action", "action_type": "issue_certificate", "title": "Completion certificates",
+                "sql": "SELECT enrollment_id, student_name, batch_code, attendance_pct FROM v_certificate_eligibility "
+                       f"WHERE eligible = 1 AND certificate_no IS NULL AND batch_status = 'completed'{where} "
+                       "ORDER BY batch_code, student_name",
+                "explanation": "Students who meet the certificate rule and don't have a certificate yet."}
 
     if re.search(r"certificate", q):
         where = f"WHERE batch_code IN ({', '.join(repr(c) for c in codes)})" if codes else "WHERE batch_status = 'completed'"
@@ -259,3 +286,34 @@ def summarize(question: str, plan: dict, result: dict) -> str:
     names = ", ".join(str(r[first_col]) for r in rows[:5])
     more = f" and {n - 5} more" if n > 5 else ""
     return f"{plan.get('explanation', 'Found results.')} {n} row(s): {names}{more}."
+
+
+def _leave_plan(question: str, q: str, user: dict, context: dict) -> dict | None:
+    """'I need leave tomorrow for a wedding', 'apply leave on Wednesday', 'Rahul is on leave on 2026-10-21'."""
+    if not re.search(r"\bleave\b", q) or re.search(r"re-?plan|timetable|affected|which|who", q):
+        return None
+    from datetime import date, timedelta
+    today = config.today()
+    dates = re.findall(r"\d{4}-\d{2}-\d{2}", q)
+    if not dates:
+        if "day after tomorrow" in q or "parso" in q:
+            dates = [(today + timedelta(days=2)).isoformat()]
+        elif "tomorrow" in q or re.search(r"\bkal\b", q):
+            dates = [(today + timedelta(days=1)).isoformat()]
+        elif "today" in q:
+            dates = [today.isoformat()]
+        else:
+            for i, d in enumerate(("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")):
+                if d in q or re.search(rf"\b{d[:3]}\b", q):
+                    ahead = (i - today.weekday()) % 7 or 7
+                    dates.append((today + timedelta(days=ahead)).isoformat())
+    if not dates:
+        return None
+    reason = re.search(r"\b(?:for|because|due to)\s+(.+?)[.?!]*$", question, re.I)
+    plan = {"type": "action", "action_type": "request_leave", "start_date": min(dates), "end_date": max(dates),
+            "reason": reason.group(1).strip() if reason else "Leave", "explanation": "A leave request for the owner to approve."}
+    if user["role"] == "owner":
+        hit = next((t for t in context.get("trainers", []) if t["name"].split()[0].lower() in q), None)
+        if hit:
+            plan["trainer_id"] = hit["id"]
+    return plan

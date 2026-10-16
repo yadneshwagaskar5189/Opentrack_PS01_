@@ -12,7 +12,7 @@ Flow
 import json
 import time
 
-from . import actions, audit, config, db, entry, llm, mock_llm, planner, question_bank, rbac, sql_guard
+from . import actions, audit, certificates, config, db, entry, leave, llm, mock_llm, planner, question_bank, rbac, sql_guard
 
 MAX_SUMMARY_ROWS = 25
 
@@ -73,7 +73,7 @@ def build_prompt(conn, user: dict, facts: dict, question: str = "") -> str:
     today = config.today()
     ws, we = config.due_window()
     pws, pwe = config.plan_week()
-    allowed_actions = [a for a in rbac.ROLES[role]["actions"] if a != "apply_timetable"]
+    allowed_actions = [a for a in rbac.ROLES[role]["actions"] + rbac.PROPOSE_ONLY.get(role, []) if a != "apply_timetable"]
     if rbac.can_do(role, "apply_timetable"):
         allowed_actions.append("replan_timetable")
     action_lines = "\n".join(f"  - {a}: {rbac.ACTION_DOCS.get(a, 'Re-plan the timetable when a trainer is unavailable.')}"
@@ -125,10 +125,14 @@ Reply with exactly ONE JSON object and nothing else, in one of these shapes:
    {{"type":"action","action_type":"mark_attendance","batch_code":"B01","date":"YYYY-MM-DD","absent":["<name>"],"late":["<name>"],"explanation":"..."}}
 9. Create an assignment and/or enter marks (0-100):
    {{"type":"action","action_type":"save_assignment","batch_code":"B01","title":"...","due_date":"YYYY-MM-DD","scores":{{"<student name>":78}},"explanation":"..."}}
+11. Ask for trainer leave (a trainer for themselves; the owner may add "trainer_id"):
+   {{"type":"action","action_type":"request_leave","start_date":"YYYY-MM-DD","end_date":"<optional YYYY-MM-DD>","reason":"<short reason>","explanation":"..."}}
+10. Issue completion certificates:
+   {{"type":"action","action_type":"issue_certificate","sql":"SELECT enrollment_id, student_name, batch_code FROM v_certificate_eligibility WHERE eligible = 1 AND certificate_no IS NULL AND batch_status = 'completed'","title":"...","explanation":"..."}}
 
 RULES
 - SQLite dialect, a single SELECT (WITH is fine). Never INSERT/UPDATE/DELETE: changes only happen through actions.
-- Use action shapes 2-4 and 6-9 only for actions listed above for this role; otherwise refuse. Never invent phone
+- Use action shapes 2-4 and 6-11 only for actions listed above for this role; otherwise refuse. Never invent phone
   numbers, amounts, references or names: copy them from the user's message (leave optional fields out if not given).
 - Use only the tables and columns listed above. Never invent columns.
 - Refuse (shape 5) if the question needs data or an action this role does not have, or is unrelated to running the institute.
@@ -200,7 +204,8 @@ def _summarize(question: str, plan: dict, result: dict) -> str:
 def _response(**kw) -> dict:
     base = {"type": "answer", "answer": "", "sql": None, "explanation": None, "columns": [], "rows": [],
             "row_count": 0, "truncated": False, "objects_read": [], "blocked": [], "action": None,
-            "proposal": None, "audit_id": None, "llm": "mock" if config.LLM_PROVIDER == "mock" else config.LLM_MODEL}
+            "proposal": None, "audit_id": None, "follow_ups": [],
+            "llm": "mock" if config.LLM_PROVIDER == "mock" else config.LLM_MODEL}
     base.update(kw)
     return base
 
@@ -215,6 +220,8 @@ def ask(user: dict, question: str, history: list[dict] | None = None) -> dict:
         if len(question) > 2000:
             return _response(type="error", answer="That question is too long (2000 characters max).")
         out = _ask(conn, user, question, history)
+        if out["type"] in ("answer", "action_preview") and not out.get("follow_ups"):
+            out["follow_ups"] = question_bank.follow_ups(question, user["role"])
         out["ms"] = round((time.perf_counter() - started) * 1000)
         return out
     finally:
@@ -238,13 +245,13 @@ def _ask(conn, user, question, history) -> dict:
 
     action_type = plan.get("action_type") if kind == "action" else None
     if action_type and action_type not in ("send_whatsapp", "mark_instalment_paid", "replan_timetable",
-                                           *entry.ENTRY_ACTIONS):
+                                           "issue_certificate", "request_leave", *entry.ENTRY_ACTIONS):
         aid = audit.log(conn, user, "refusal", question=question, outcome="unknown_action",
                         detail={"action_type": action_type})
         return _response(type="refusal", answer="I can only prepare previews of messages, fee updates, timetable "
                                                 "changes, new students, payments, attendance and marks.", audit_id=aid)
     needed = "apply_timetable" if action_type == "replan_timetable" else action_type
-    if needed and not rbac.can_do(user["role"], needed):
+    if needed and not rbac.can_propose(user["role"], needed):
         aid = audit.log(conn, user, "refusal", question=question, outcome="action_not_allowed",
                         detail={"action_type": action_type})
         return _response(type="refusal", audit_id=aid,
@@ -254,6 +261,8 @@ def _ask(conn, user, question, history) -> dict:
         return _replan(conn, user, question, plan)
     if action_type in entry.ENTRY_ACTIONS:
         return _entry(conn, user, question, plan)
+    if action_type == "request_leave":
+        return _leave(conn, user, question, plan)
 
     sql = (plan.get("sql") or "").strip()
     result, attempts = None, 0
@@ -302,6 +311,10 @@ def _ask(conn, user, question, history) -> dict:
             action = actions.propose_messages(conn, user, result["rows"], template, plan.get("title"))
             answer = (f"I drafted {len(action['payload']['items'])} WhatsApp message(s). Nothing has been sent: "
                       f"review, edit or remove any message, then approve.")
+        elif action_type == "issue_certificate":
+            action = certificates.propose(conn, user, result["rows"], plan.get("title"))
+            answer = (f"Ready to issue {len(action['payload']['items'])} certificate(s). Eligibility is checked again "
+                      f"when you approve; nothing is issued until then.")
         else:
             action = actions.propose_mark_paid(conn, user, result["rows"], plan.get("title"))
             answer = (f"Ready to mark {len(action['payload']['items'])} instalment(s) as paid. "
@@ -352,6 +365,22 @@ def _entry(conn, user, question, plan) -> dict:
                     detail={"action_id": action["id"], "action_type": t})
     return _response(type="action_preview", answer=ENTRY_ANSWERS[t], action=action,
                      explanation=plan.get("explanation"), audit_id=aid)
+
+
+def _leave(conn, user, question, plan) -> dict:
+    spec = {k: plan.get(k) for k in ("trainer_id", "trainer_name", "start_date", "end_date", "reason") if plan.get(k)}
+    try:
+        action = leave.propose(conn, user, spec)
+    except actions.ActionError as e:
+        aid = audit.log(conn, user, "refusal", question=question, outcome="entry_not_created",
+                        detail={"action_type": "request_leave", "error": e.message, "fields": spec})
+        return _response(type="answer", answer=f"I couldn't prepare that: {e.message}", audit_id=aid)
+    aid = audit.log(conn, user, "ask_action", question=question, outcome="preview_created",
+                    detail={"action_id": action["id"], "action_type": "request_leave"})
+    who = "The owner" if user["role"] != "owner" else "You"
+    return _response(type="action_preview", action=action, explanation=plan.get("explanation"), audit_id=aid,
+                     answer=f"Here is the leave request. {who} can approve it in Approvals; classes in the planning "
+                            f"week then get a re-plan with substitutes.")
 
 
 def _replan(conn, user, question, plan) -> dict:

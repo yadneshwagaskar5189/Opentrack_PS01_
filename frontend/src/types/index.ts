@@ -81,7 +81,7 @@ export interface Proposal {
 }
 
 export type ActionType = 'send_whatsapp' | 'mark_instalment_paid' | 'apply_timetable'
-  | 'add_student' | 'record_payment' | 'mark_attendance' | 'save_assignment';
+  | 'add_student' | 'record_payment' | 'mark_attendance' | 'save_assignment' | 'issue_certificate' | 'request_leave';
 export const ENTRY_TYPES: ActionType[] = ['add_student', 'record_payment', 'mark_attendance', 'save_assignment'];
 export type ActionStatus = 'pending' | 'approved' | 'rejected' | 'failed';
 
@@ -116,6 +116,7 @@ export interface CopilotResponse {
   audit_id?: number | null;
   llm?: string;
   ms?: number;
+  follow_ups?: string[];          // natural next questions, already filtered for this role
 }
 
 export interface Timetable {
@@ -144,6 +145,7 @@ export interface AuditEntry {
   sql_text: string | null;
   outcome: string | null;
   detail: Record<string, unknown> | null;
+  hash?: string | null;            // tamper seal (see backend app/audit.py)
 }
 
 export interface Trainer {
@@ -193,6 +195,7 @@ export interface ClassToday {
   trainer_name: string;
   room_name: string | null;
   is_online: number;
+  trainer_on_leave?: number;
 }
 
 export interface Course {
@@ -285,6 +288,7 @@ export interface EntryOptions {
   today: string;
   batches: EntryBatch[];
   courses?: { code: string; name: string; total_fee: number; emi_count: number }[];
+  trainers?: { id: number; name: string }[];      // owner only: for leave requests
 }
 
 export interface RosterStudent { student_id: number; name: string; learning_mode: string; status?: string | null }
@@ -319,3 +323,10 @@ export interface OpenInstalment {
 
 // A checked everyday question the copilot knows well (GET /api/copilot/questions)
 export interface CopilotQuestion { id: string; topic: string; question: string; explanation: string }
+
+// GET /api/audit/verify: the audit log's tamper seals
+export interface AuditVerify { ok: boolean; entries: number; problems: { id: number; problem: string }[]; message: string; last_entry: { id: number; ts: string } | null; checked_at?: string }
+
+// GET /api/brief: the morning brief
+export interface BriefSection { key: string; title: string; lines: string[]; tone: 'info' | 'warn' | 'ok'; ask: string | null }
+export interface Brief { date: string; headline: string; sections: BriefSection[]; text: string }

@@ -22,7 +22,7 @@ always have answers. Planted demo cases (use them in your presentation):
 import random
 from datetime import date, datetime, timedelta
 
-from . import config, db, timetable
+from . import audit, config, db, timetable
 from .auth import hash_password
 
 rng = random.Random(42)
@@ -364,6 +364,7 @@ def seed() -> dict:
     cur.execute("INSERT INTO audit_log (ts, event_type, outcome, detail_json) VALUES (?,?,?,?)",
                 (datetime.now().isoformat(timespec="seconds"), "seed", "ok",
                  f'{{"today": "{today.isoformat()}"}}'))
+    audit.seal(conn)
     conn.commit()
 
     summary = {

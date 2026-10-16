@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { BookOpenCheck, CalendarCheck, ChevronDown, Eye, IndianRupee, PenLine, Search, ShieldCheck, UserPlus } from 'lucide-react';
+import { BookOpenCheck, CalendarCheck, CalendarX2, ChevronDown, Eye, IndianRupee, PenLine, Search, ShieldCheck, UserPlus } from 'lucide-react';
 import type { Action, ActionType, AssignmentsInfo, EntryBatch, EntryOptions, OpenInstalment, Roster } from '../types';
 import * as api from '../services/api';
 import { ActionPreview } from '../components/ActionPreview';
@@ -10,6 +10,7 @@ const TABS: { id: ActionType; label: string; icon: typeof UserPlus; hint: string
   { id: 'record_payment', label: 'Record payment', icon: IndianRupee, hint: 'Record money received against an EMI. Duplicate UTRs and overpayments are blocked.' },
   { id: 'mark_attendance', label: 'Attendance', icon: CalendarCheck, hint: 'Mark one class. Trainers can only mark their own batches.' },
   { id: 'save_assignment', label: 'Assignment & marks', icon: BookOpenCheck, hint: 'Create an assignment and enter scores out of 100.' },
+  { id: 'request_leave', label: 'Leave', icon: CalendarX2, hint: 'Ask for leave. The owner approves it; classes in the planning week then get a re-plan with substitutes.' },
 ];
 
 type Props = ViewProps;
@@ -45,6 +46,7 @@ export function DataEntryView({ me, onToast, refreshPending }: Props) {
       {tab === 'record_payment' && <PaymentForm {...shared} />}
       {tab === 'mark_attendance' && <AttendanceForm {...shared} />}
       {tab === 'save_assignment' && <AssignmentForm {...shared} />}
+      {tab === 'request_leave' && <LeaveForm {...shared} />}
     </>}
   </section>;
 }
@@ -233,5 +235,35 @@ function AssignmentForm({ me, onToast, refresh, opts }: FormProps) {
         <button className="simulate-button" disabled={p.busy || (which === 'new' && (!title.trim() || !due))}><Eye size={14} /> {p.busy ? 'Checking…' : 'Preview'}</button></div>
     </form>
     <PreviewPane {...p} me={me} onToast={onToast} onDone={(a) => { p.done(a); if (a.status === 'approved') { setTitle(''); setDue(''); setWhich('new'); load(); } }} />
+  </div>;
+}
+
+// ---------------------------------------------------------------- leave request
+function LeaveForm({ me, onToast, refresh, opts }: FormProps) {
+  const isOwner = me.user.role === 'owner';
+  const [trainer, setTrainer] = useState(String(opts.trainers?.[0]?.id ?? ''));
+  const [from, setFrom] = useState(opts.today);
+  const [to, setTo] = useState('');
+  const [reason, setReason] = useState('');
+  const p = usePreview(refresh);
+  async function send() {
+    await p.run(() => api.proposeLeave({ trainer_id: isOwner ? Number(trainer) : undefined, start_date: from, end_date: to || undefined, reason }));
+    if (!isOwner) onToast('Leave request sent to the owner for approval', 'success');
+  }
+  return <div className="entry-grid">
+    <form className="panel entry-form" onSubmit={(e) => { e.preventDefault(); void send(); }}>
+      {isOwner && <><label className="field-label" htmlFor="lv-trainer">TRAINER</label>
+        <div className="select-field"><select id="lv-trainer" value={trainer} onChange={(e) => setTrainer(e.target.value)}>
+          {opts.trainers?.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select><ChevronDown size={14} /></div></>}
+      <div className="form-grid">
+        <div><label className="field-label" htmlFor="lv-from">FIRST DAY</label><input className="form-input" id="lv-from" type="date" min={opts.today} value={from} onChange={(e) => setFrom(e.target.value)} required /></div>
+        <div><label className="field-label" htmlFor="lv-to">LAST DAY (OPTIONAL)</label><input className="form-input" id="lv-to" type="date" min={from} value={to} onChange={(e) => setTo(e.target.value)} /></div>
+      </div>
+      <label className="field-label" htmlFor="lv-reason">REASON</label>
+      <input className="form-input" id="lv-reason" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Medical appointment" maxLength={200} />
+      <div className="entry-actions"><span className="entry-hint">{isOwner ? 'You can approve it next.' : 'The owner approves it. Your classes those days are listed first.'}</span>
+        <button className="simulate-button" disabled={p.busy || !from}><Eye size={14} /> {p.busy ? 'Checking…' : isOwner ? 'Preview' : 'Send leave request'}</button></div>
+    </form>
+    <PreviewPane {...p} me={me} onToast={onToast} onDone={(a) => p.done(a)} />
   </div>;
 }

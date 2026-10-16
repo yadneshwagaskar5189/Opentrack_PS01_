@@ -23,7 +23,7 @@ import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from . import config, db, timetable
+from . import audit, config, db, timetable
 from .auth import hash_password
 
 REQUIRED = ["courses", "rooms", "trainers", "batches", "students", "enrollments", "users"]
@@ -151,6 +151,7 @@ def import_folder(path: str | Path | None = None, institute_name: str | None = N
         cur.execute("INSERT INTO audit_log (ts, event_type, outcome, detail_json) VALUES (?,?,?,?)",
                     (datetime.now().isoformat(timespec="seconds"), "seed", "ok",
                      f'{{"source": "csv", "today": "{today.isoformat()}"}}'))
+        audit.seal(conn)
         conn.commit()
         ctx = timetable.load_context(conn, week)
         problems_now = [v["message"] for v in timetable.find_violations(ctx, timetable.load_slots(conn, week))]
