@@ -62,19 +62,26 @@ def _create(conn, user, action_type: str, title: str, payload: dict) -> dict:
 def propose_messages(conn, user, rows: list[dict], template: str, title: str | None = None) -> dict:
     if not rbac.can_do(user["role"], "send_whatsapp"):
         raise ActionError(f"Your role ({user['role']}) cannot send messages.", 403)
-    items, skipped = [], []
-    for row in rows[:MAX_ITEMS]:
+    items, skipped, seen, duplicates = [], [], set(), 0
+    for row in rows:
+        if len(items) >= MAX_ITEMS:
+            break
         phone = _first(row, "phone", "student_phone", "mobile", "guardian_phone")
         name = _first(row, "name", "student_name") or "Student"
         if not phone:
             skipped.append(name)
             continue
+        key = _first(row, "student_id") or phone          # one message per student, even if several rows match
+        if key in seen:
+            duplicates += 1
+            continue
+        seen.add(key)
         items.append({"student_id": _first(row, "student_id", "id"), "name": name, "phone": phone,
                       "message": fill_template(template, row)})
     if not items:
         raise ActionError("No recipients with a phone number were found, so there is nothing to send.")
     payload = {"channel": "whatsapp", "template": template, "items": items, "skipped_no_phone": skipped,
-               "capped_at": MAX_ITEMS if len(rows) > MAX_ITEMS else None}
+               "merged_duplicates": duplicates, "capped_at": MAX_ITEMS if len(rows) - duplicates > MAX_ITEMS else None}
     return _create(conn, user, "send_whatsapp", title or f"WhatsApp reminder to {len(items)} students", payload)
 
 
@@ -223,26 +230,35 @@ def _run_messages(conn, a: dict, edits: dict) -> dict:
 def _deliver_queued(conn, user, action_id: int) -> None:
     """Send the approved messages (really, or simulated: see app/whatsapp.py) and record each result."""
     from . import whatsapp
-    rows = conn.execute("SELECT o.id, o.to_phone, o.body, s.name FROM messages_outbox o "
+    # trust is decided by the phone number itself: only a number staff typed in for a student is "real"
+    rows = conn.execute("SELECT o.id, o.to_phone, o.body, s.name, EXISTS (SELECT 1 FROM students t "
+                        "WHERE t.phone = o.to_phone AND t.real_contact = 1) AS real_contact FROM messages_outbox o "
                         "LEFT JOIN students s ON s.id = o.student_id WHERE o.action_id=? AND o.status='queued' "
                         "ORDER BY o.id", (action_id,)).fetchall()
-    statuses = []
+    statuses, links = [], []
     for r in rows:
-        status = whatsapp.send(r["to_phone"], r["body"], r["name"] or "")
+        trusted = bool(r["real_contact"])                 # added in the app: the number is real
+        status = whatsapp.send(r["to_phone"], r["body"], r["name"] or "", trusted)
         conn.execute("UPDATE messages_outbox SET status=? WHERE id=?", (status, r["id"]))
         statuses.append(status)
+        # not sent automatically? a person can still send it in one tap (same who-may-receive rule)
+        links.append(None if status.startswith("sent") else whatsapp.link(r["to_phone"], r["body"], r["name"] or "", trusted))
         conn.commit()
     row = conn.execute("SELECT result_json FROM pending_actions WHERE id=?", (action_id,)).fetchone()
     result = json.loads(row["result_json"] or "{}")
-    for item, status in zip(result.get("sent", []), statuses):
+    for item, status, wa in zip(result.get("sent", []), statuses, links):
         item["status"] = status
+        if wa:
+            item["wa_link"], item["wa_to"] = wa["url"], wa["to"]
     result["delivery"] = whatsapp.mode()
     conn.execute("UPDATE pending_actions SET result_json=? WHERE id=?", (json.dumps(result), action_id))
     sent = sum(s.startswith("sent") for s in statuses)
     failed = sum(s.startswith("failed") for s in statuses)
-    audit.log(conn, user, "whatsapp_delivery", outcome="sent" if sent and not failed else "failed" if failed else "simulated",
-              detail={"action_id": action_id, "sent": sent, "failed": failed,
-                      "simulated": len(statuses) - sent - failed, "provider": result["delivery"]["provider"]},
+    ready = sum(s.startswith("ready") for s in statuses)
+    audit.log(conn, user, "whatsapp_delivery",
+              outcome="sent" if sent and not failed else "failed" if failed else "ready" if ready else "simulated",
+              detail={"action_id": action_id, "sent": sent, "failed": failed, "ready_to_send": ready,
+                      "simulated": len(statuses) - sent - failed - ready, "provider": result["delivery"]["provider"]},
               commit=False)
     conn.commit()
 

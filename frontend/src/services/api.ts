@@ -1,6 +1,6 @@
 // Every call to the FastAPI backend lives here. The Vite dev server forwards /api to it.
 import type {
-  Action, AssignmentsInfo, AuditEntry, BatchRequest, CopilotResponse, Course, Dashboard, EntryOptions, Health, Me,
+  Action, AssignmentsInfo, AuditEntry, BatchRequest, CopilotQuestion, CopilotResponse, Course, Dashboard, EntryOptions, Health, Me,
   OpenInstalment, PlannerResult, Reconciliation, RiskReport, Role, Roster, Row, Timetable, Trainer, User,
 } from '../types';
 
@@ -83,6 +83,9 @@ export const getDashboard = () => request<Dashboard>('/dashboard');
 
 export const ask = (question: string, history: { question: string; sql: string }[]) =>
   request<CopilotResponse>('/copilot/ask', 'POST', { question, history });
+
+// The checked everyday questions this role can ask (fee structure, today's lectures, which trainer...)
+export const getQuestions = () => request<{ items: CopilotQuestion[] }>('/copilot/questions').then((d) => d.items);
 
 // Runs raw SQL through the database guard with no AI involved: proves security doesn't depend on the AI.
 export const trySql = (sql: string) => request<CopilotResponse>('/security/try-sql', 'POST', { sql });

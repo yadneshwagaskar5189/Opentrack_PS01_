@@ -282,7 +282,8 @@ def propose_student(conn, user: dict, spec: dict) -> dict:
          ("Fee", f"{_rupees(total)}" + (f" − {_rupees(discount)} discount = {_rupees(net)}" if discount else "")
           + f", {n} instalment(s)")],
         {"columns": ["EMI", "Due", "Amount"], "rows": [[p["no"], p["due_date"], _rupees(p["amount"])] for p in plan]},
-        checks=[seat, "Phone number is valid and not used by another student"], warnings=warnings)
+        checks=[seat, "Phone number is valid and not used by another student",
+                "Approved WhatsApp reminders will go straight to this number"], warnings=warnings)
     return _create(conn, user, "add_student", f"Add {s['name']} to {b['code']} ({mode})", payload)
 
 
@@ -295,9 +296,10 @@ def run_student(conn, a: dict, edits: dict | None = None) -> dict:
     if sid is None:
         if conn.execute("SELECT 1 FROM students WHERE phone=?", (s["phone"],)).fetchone():
             raise ActionError(f"Phone {s['phone']} was registered meanwhile. Make a new preview.", 409)
-        sid = conn.execute("INSERT INTO students (name, phone, email, city, parent_name, guardian_phone, joined_on) "
-                           "VALUES (?,?,?,?,?,?,?)", (s["name"], s["phone"], s["email"], s["city"], s["parent_name"],
-                                                      s["parent_phone"], p["joined_on"])).lastrowid
+        sid = conn.execute("INSERT INTO students (name, phone, email, city, parent_name, guardian_phone, joined_on, "
+                           "real_contact) VALUES (?,?,?,?,?,?,?,1)",       # typed in by staff: WhatsApp goes here
+                           (s["name"], s["phone"], s["email"], s["city"], s["parent_name"],
+                            s["parent_phone"], p["joined_on"])).lastrowid
     elif conn.execute("SELECT 1 FROM enrollments WHERE student_id=? AND batch_id=? AND status='active'",
                       (sid, b["id"])).fetchone():
         raise ActionError(f"{s['name']} is already enrolled in {b['code']}.", 409)

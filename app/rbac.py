@@ -13,6 +13,7 @@ OBJECT_DOCS = {
     "v_trainers_public": "Trainers and their skills (comma list; a skill word in a course name means they can teach it).",
     "v_batches": "Batches: code (e.g. B01), batch_name, course, trainer, mode (classroom/online/hybrid), time_window, usual days/start_time/end_time, online_seat_limit, current online_students and classroom_students, dates, status active/upcoming/completed.",
     "v_timetable": "The planning week's timetable (dates in the prompt). day_of_week 0=Mon..6=Sun, hours on 24h clock (19.5 = 19:30), is_online=1 uses an online licence.",
+    "v_schedule": "Every class by date, past and future: class_date, day_name, start_time/end_time (HH:MM), batch_code, course_name, trainer_name (who takes it, incl. substitutes), room_name, status held/cancelled/scheduled, topic, trainer_on_leave (1/0). Use for today's/tomorrow's lectures and who teaches them.",
     "v_students": "Students with phone (+91...), email, city, parent_name, guardian_phone (parent's phone).",
     "v_enrollments": "Which student is in which batch. status active/completed/dropped; learning_mode classroom/online.",
     "v_class_sessions": "Classes held per batch with date and topic. status held/cancelled/scheduled.",
@@ -39,6 +40,7 @@ OBJECT_DOCS = {
     "t_my_submissions": "Submissions for your assignments, score out of 100.",
     "t_my_recordings": "Recordings of your classes.",
     "t_my_timetable": "Your timetable this week. day_of_week 0=Mon..6=Sun.",
+    "t_my_schedule": "Your classes by date, past and future: class_date, day_name, start_time/end_time, batch_code, course_name, room_name, status, topic. Use for your lectures today/tomorrow.",
 }
 
 ROLES = {
@@ -47,7 +49,7 @@ ROLES = {
         "objects": [
             "v_students", "v_enrollments", "v_batches", "v_courses_with_fee", "v_trainers_public",
             "v_rooms", "v_class_sessions", "v_attendance", "v_assignments", "v_submissions",
-            "v_recordings", "v_instalments", "v_fee_plans", "v_payments", "v_timetable",
+            "v_recordings", "v_instalments", "v_fee_plans", "v_payments", "v_timetable", "v_schedule",
             "v_bank_statement", "v_certificate_eligibility",
             "trainers", "trainer_availability", "trainer_leaves", "certificates",
             "messages_outbox", "audit_log",
@@ -61,7 +63,7 @@ ROLES = {
         "objects": [
             "v_students", "v_enrollments", "v_batches", "v_courses_with_fee", "v_trainers_public",
             "v_class_sessions", "v_attendance", "v_assignments", "v_submissions",
-            "v_recordings", "v_instalments", "v_timetable", "v_certificate_eligibility",
+            "v_recordings", "v_instalments", "v_timetable", "v_schedule", "v_certificate_eligibility",
         ],
         "actions": ["send_whatsapp", "add_student"],
         "can_see_fees": True,
@@ -79,7 +81,7 @@ ROLES = {
         "label": "Trainer",
         "objects": [
             "t_my_batches", "t_my_students", "t_my_sessions", "t_my_attendance",
-            "t_my_assignments", "t_my_submissions", "t_my_recordings", "t_my_timetable",
+            "t_my_assignments", "t_my_submissions", "t_my_recordings", "t_my_timetable", "t_my_schedule",
             "v_courses_public", "v_rooms",
         ],
         "actions": ["mark_attendance", "save_assignment"],          # own batches only (checked in entry.py)

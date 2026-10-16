@@ -316,3 +316,6 @@ export interface OpenInstalment {
   balance: number;
   status: string;
 }
+
+// A checked everyday question the copilot knows well (GET /api/copilot/questions)
+export interface CopilotQuestion { id: string; topic: string; question: string; explanation: string }

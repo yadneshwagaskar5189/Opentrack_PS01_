@@ -1,17 +1,18 @@
 import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
-import { Activity, ArrowDown, ArrowUp, ArrowUpRight, Check, ChevronDown, ChevronRight, Clock3, Copy, Download, FileSearch, LockKeyhole, RefreshCw, Send, ShieldAlert, ShieldCheck, Sparkles, Table2, TerminalSquare, TriangleAlert, Users, WandSparkles, Wallet } from 'lucide-react';
+import { Activity, ArrowDown, ArrowUp, ArrowUpRight, Check, ChevronDown, ChevronRight, Clock3, Copy, Download, FileSearch, ListChecks, LockKeyhole, RefreshCw, Search, Send, ShieldAlert, ShieldCheck, Sparkles, Table2, TerminalSquare, TriangleAlert, Users, WandSparkles, Wallet } from 'lucide-react';
 import * as api from '../services/api';
-import type { CopilotResponse, Dashboard, Health, Role, Row } from '../types';
+import type { CopilotQuestion, CopilotResponse, Dashboard, Health, Role, Row } from '../types';
 import { ActionPreview, ChangeList } from '../components/ActionPreview';
+import { Modal } from '../components/Feedback';
 import type { ViewProps } from './common';
 
 const JAVA_Q = 'Which students in the Java batch have missed three or more classes and have an EMI due this week? Draft a WhatsApp reminder for each.';
 
 const PROMPTS: Record<Role, string[]> = {
-  owner: [JAVA_Q, 'Is any trainer double-booked this week?', 'Sunita is on leave on Tuesday, re-plan her classes', 'How much fee is overdue in total?'],
-  counselor: [JAVA_Q, 'Which B08 students are eligible for a certificate?', 'Which classes are missing a recording?', 'Add Riya Shah, 9876543210, parent Sunil Shah 9822012345, to B01 online'],
-  accounts: ['Which EMIs are due this week?', 'Show overdue EMIs, biggest first', 'Record a payment of ₹11,000 from Rohan Gupta by UPI, ref 412398765012'],
-  trainer: ['Who missed the most classes in my batches?', 'Mark attendance for B01 today: everyone present except Aarav Sharma', 'What is my timetable this week?'],
+  owner: [JAVA_Q, "Which trainer is taking today's lectures?", 'Sunita is on leave on Tuesday, re-plan her classes', 'What is the total fee structure?'],
+  counselor: [JAVA_Q, "What are today's lectures?", 'Which classes are missing a recording?', 'Add Riya Shah, 9876543210, parent Sunil Shah 9822012345, to B01 online'],
+  accounts: ['What is the total fee structure?', 'Which EMIs are due this week?', 'Show overdue EMIs, biggest first', 'Record a payment of ₹11,000 from Rohan Gupta by UPI, ref 412398765012'],
+  trainer: ["What are today's lectures?", 'Who missed the most classes in my batches?', 'Mark attendance for B01 today: everyone present except Aarav Sharma'],
 };
 const FOLLOW_UPS: Record<Role, string[]> = {
   owner: ['Can B02 take one more online student?', 'Which batch has the lowest attendance?'],
@@ -48,8 +49,12 @@ export function CopilotView({ me, health, onToast, onNavigate, refreshPending, m
   const endRef = useRef<HTMLDivElement>(null);
   const handled = useRef<number | null>(null);
   const live = health && health.llm !== 'mock';
+  const [questions, setQuestions] = useState<CopilotQuestion[]>([]);
+  const [bankOpen, setBankOpen] = useState(false);
+  const [bankFilter, setBankFilter] = useState('');
 
   useEffect(() => { api.getDashboard().then(setSnapshot).catch(() => undefined); }, [messages.length]);
+  useEffect(() => { api.getQuestions().then(setQuestions).catch(() => undefined); }, []);
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }, [messages.length, loading]);
   useEffect(() => {
     if (queued && handled.current !== queued.id) {
@@ -162,7 +167,7 @@ export function CopilotView({ me, health, onToast, onNavigate, refreshPending, m
             {loading && <div className="message-row assistant"><span className="message-avatar"><Sparkles size={13} /></span><div className="thinking-bubble"><i /><i /><i /><span>Checking institute records…</span></div></div>}
             <div ref={endRef} />
           </div>
-          <div className="suggestion-row"><span className="suggestion-label">TRY ASKING</span>{PROMPTS[role].map((p) => <button key={p} className="prompt-chip" onClick={() => void submit(p)} disabled={loading} title={p}>{p.length > 62 ? `${p.slice(0, 60)}…` : p}<ArrowUpRight size={12} /></button>)}</div>
+          <div className="suggestion-row"><span className="suggestion-label">TRY ASKING</span>{questions.length > 0 && <button className="prompt-chip qbank-chip" onClick={() => setBankOpen(true)} disabled={loading}><ListChecks size={12} /> All {questions.length} questions</button>}{PROMPTS[role].map((p) => <button key={p} className="prompt-chip" onClick={() => void submit(p)} disabled={loading} title={p}>{p.length > 62 ? `${p.slice(0, 60)}…` : p}<ArrowUpRight size={12} /></button>)}</div>
           <form className="composer" onSubmit={(e) => { e.preventDefault(); void submit(); }}><span className="composer-icon"><WandSparkles size={15} /></span><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Ask about students, fees, attendance, the timetable…" aria-label="Ask Institute Copilot" /><kbd>↵</kbd><button className="send-button" type="submit" disabled={!query.trim() || loading} aria-label="Send question"><Send size={15} /></button></form>
           <div className="composer-foot"><span><LockKeyhole size={11} /> Read-only copilot · your role decides what it can read</span><button className="refusal-trigger" onClick={() => void tryToBreakIt()} disabled={loading}><ShieldAlert size={12} /> Try to break it (raw SQL, no AI)</button></div>
         </div>
@@ -194,7 +199,28 @@ export function CopilotView({ me, health, onToast, onNavigate, refreshPending, m
         <div className="scope-card"><span className="scope-shield"><ShieldCheck size={16} /></span><div><b>What you can see</b><p>{me.restrictions}</p><p className="scope-actions">{me.allowed_actions.length ? `You can propose: ${me.allowed_actions.map((a) => a.replaceAll('_', ' ')).join(', ')}.` : "You can ask questions, but you can't send messages or change data."}</p></div></div>
       </aside>
     </div>
+    {bankOpen && <QuestionBank questions={questions} filter={bankFilter} setFilter={setBankFilter} onClose={() => setBankOpen(false)}
+                               onAsk={(q) => { setBankOpen(false); void submit(q); }} />}
   </section>;
+}
+
+// The checked everyday questions for this role, grouped by topic. One click asks it.
+function QuestionBank({ questions, filter, setFilter, onClose, onAsk }: { questions: CopilotQuestion[]; filter: string; setFilter: (v: string) => void; onClose: () => void; onAsk: (q: string) => void }) {
+  const needle = filter.trim().toLowerCase();
+  const shown = questions.filter((q) => !needle || `${q.question} ${q.topic} ${q.explanation}`.toLowerCase().includes(needle));
+  const topics = [...new Set(shown.map((q) => q.topic))];
+  return <Modal eyebrow={`QUESTION BANK · ${questions.length} CHECKED QUESTIONS FOR YOUR ROLE`} title="Ask a common question" size="wide" onClose={onClose}>
+    <div className="qbank">
+      <p className="qbank-intro">Each question has an answer tested on this database. Ask them in your own words too, for example "aaj ke lec" or "which sir is allotted today".</p>
+      <label className="qbank-search"><Search size={14} /><input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter: fee, today, trainer, attendance…" autoFocus /></label>
+      <div className="qbank-list">
+        {topics.map((t) => <section key={t} className="qbank-group"><h4>{t}</h4>
+          {shown.filter((q) => q.topic === t).map((q) => <button key={q.id} className="qbank-item" onClick={() => onAsk(q.question)}><b>{q.question}</b><small>{q.explanation}</small><ArrowUpRight size={14} /></button>)}
+        </section>)}
+        {!shown.length && <p className="qbank-empty">No question matches "{filter}". You can still type it in the chat.</p>}
+      </div>
+    </div>
+  </Modal>;
 }
 
 function ResponseExtras({ res, role, canDecide, onToast, onDecided, onOpenApprovals }: { res: CopilotResponse; role: Role; canDecide: boolean; onToast: ViewProps['onToast']; onDecided: () => void; onOpenApprovals: () => void }) {

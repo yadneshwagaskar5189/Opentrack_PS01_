@@ -225,3 +225,49 @@ def test_copilot_makes_entry_previews(who, question, kind):
 def test_copilot_entry_refused_outside_role():
     assert copilot.ask(user(RAHUL), "Mark attendance for B03 today")["answer"].startswith("I couldn't prepare that")
     assert copilot.ask(user(ACCOUNTS), "Add Riya Shah, 9876543210 to B01")["type"] == "refusal"
+
+
+def test_new_student_gets_whatsapp_on_own_number(monkeypatch):
+    """A student added in the app gets reminders on their own number; sample students go to the redirect."""
+    monkeypatch.setattr(config, "WHATSAPP_PROVIDER", "link")
+    monkeypatch.setattr(config, "WHATSAPP_REDIRECT_TO", "+919822012345")
+    monkeypatch.setattr(config, "WHATSAPP_ALLOWED", [])
+    conn = db.get_conn()
+    a = entry.propose_student(conn, user(COUNSELOR), {"name": "Riya Shah", "phone": "9876543210",
+                                                      "batch_code": "B01", "learning_mode": "classroom"})
+    assert any("go straight to this number" in c for c in a["payload"]["preview"]["checks"])
+    _approve(COUNSELOR, a)
+    riya = dict(conn.execute("SELECT id, phone, real_contact FROM students WHERE phone='+919876543210'").fetchone())
+    aarav = dict(conn.execute("SELECT id, phone, real_contact FROM students WHERE id=1").fetchone())
+    assert riya["real_contact"] == 1 and aarav["real_contact"] == 0
+    rows = [{"student_id": riya["id"], "name": "Riya Shah", "phone": riya["phone"]},
+            {"student_id": aarav["id"], "name": "Aarav Sharma", "phone": aarav["phone"]}]
+    msg = actions.propose_messages(conn, user(COUNSELOR), rows, "Hi {name}, your EMI is due.")
+    sent = _approve(COUNSELOR, msg)["result"]["sent"]
+    assert sent[0]["wa_to"] == "+919876543210" and sent[0]["wa_link"].startswith("https://wa.me/919876543210?text=Hi%20Riya")
+    assert sent[1]["wa_to"] == "+919822012345" and "Demo%3A%20for%20Aarav" in sent[1]["wa_link"]
+    # a row whose student_id is wrong can't borrow trust: trust follows the phone number
+    rows = [{"student_id": riya["id"], "name": "Aarav Sharma", "phone": aarav["phone"]}]
+    sent = _approve(COUNSELOR, actions.propose_messages(conn, user(COUNSELOR), rows, "Hi {name}"))["result"]["sent"]
+    assert sent[0]["wa_to"] == "+919822012345"
+    monkeypatch.setattr(config, "WHATSAPP_REDIRECT_TO", "")      # no redirect: sample students stay simulated
+    rows = [{"student_id": riya["id"], "name": "Riya Shah", "phone": riya["phone"]},
+            {"student_id": aarav["id"], "name": "Aarav Sharma", "phone": aarav["phone"]}]
+    sent = _approve(COUNSELOR, actions.propose_messages(conn, user(COUNSELOR), rows, "Hi {name}"))["result"]["sent"]
+    assert sent[0]["status"].startswith("ready") and sent[1]["status"].startswith("simulated") and "wa_link" not in sent[1]
+
+
+def test_upgrade_adds_real_contact_to_an_old_database():
+    conn = db.get_conn()
+    a = entry.propose_student(conn, user(COUNSELOR), {"name": "Old Db Student", "phone": "9876500011",
+                                                      "batch_code": "B01", "learning_mode": "classroom"})
+    _approve(COUNSELOR, a)
+    conn.execute("ALTER TABLE students DROP COLUMN real_contact")          # as an older version made it
+    conn.commit()
+    conn.close()
+    db.upgrade()
+    conn = db.get_conn()
+    got = dict(conn.execute("SELECT name, real_contact FROM students WHERE phone='+919876500011'").fetchone())
+    assert got["real_contact"] == 1
+    assert conn.execute("SELECT COUNT(*) FROM students WHERE real_contact=1").fetchone()[0] == 1
+    db.upgrade()                                                            # running it again changes nothing

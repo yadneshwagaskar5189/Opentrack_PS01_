@@ -124,6 +124,7 @@ export function ActionPreview({ action: initial, canDecide, onDecided, onToast, 
       {action.payload.preview && <EntryPreviewBody preview={action.payload.preview} />}
 
       {action.status === 'approved' && <div className="resolved-note"><Check size={12} /> {resultText(action)}</div>}
+      {action.status === 'approved' && <WaSendList action={action} />}
       {action.status === 'rejected' && <div className="resolved-note"><XCircle size={12} /> {isEntry ? 'Discarded. Nothing was saved.' : 'Rejected. Nothing was sent or changed.'}</div>}
       {action.status === 'failed' && <div className="resolved-note"><XCircle size={12} /> {String(action.result?.error ?? 'Failed. Nothing was changed.')}</div>}
 
@@ -193,16 +194,43 @@ export function EntryPreviewBody({ preview }: { preview: EntryPreview }) {
   );
 }
 
+type SentItem = { name: string; phone: string; status: string; wa_link?: string; wa_to?: string };
+
+// Messages that were not sent automatically: one tap opens WhatsApp with the text typed, a person presses Send.
+export function WaSendList({ action }: { action: Action }) {
+  const [done, setDone] = useState<number[]>([]);
+  if (action.action_type !== 'send_whatsapp' || action.status !== 'approved') return null;
+  const sent = ((action.result?.sent as SentItem[] | undefined) ?? []).filter((s) => s.wa_link);
+  if (!sent.length) return null;
+  return (
+    <div className="wa-send">
+      <small>Send on WhatsApp: each button opens WhatsApp with the message typed, to the number shown. Press Send there.</small>
+      <div className="wa-send-list">
+        {sent.map((s, i) => (
+          <a key={i} href={s.wa_link} target="_blank" rel="noreferrer" className={`wa-send-button ${done.includes(i) ? 'done' : ''}`}
+             title={s.wa_to && s.wa_to !== s.phone ? `Demo: sample number, opens ${s.wa_to}` : `Opens ${s.wa_to ?? s.phone}`}
+             onClick={() => setDone((d) => (d.includes(i) ? d : [...d, i]))}>
+            {done.includes(i) ? <Check size={14} /> : <MessageCircle size={14} />} {s.name}
+            <span className="wa-send-to">{s.wa_to && s.wa_to !== s.phone ? `demo → ${s.wa_to}` : s.wa_to ?? s.phone}</span>
+          </a>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function resultText(action: Action) {
   const r = action.result ?? {};
   if (typeof r.message === 'string') return r.message;
   if (action.action_type === 'send_whatsapp') {
-    const sent = (r.sent as { status: string }[] | undefined) ?? [];
+    const sent = (r.sent as SentItem[] | undefined) ?? [];
     const real = sent.filter((s) => s.status.startsWith('sent')).length;
     const failed = sent.filter((s) => s.status.startsWith('failed'));
-    const simulated = sent.length - real - failed.length;
+    const ready = sent.filter((s) => s.status.startsWith('ready')).length;
+    const simulated = sent.length - real - failed.length - ready;
     const parts: string[] = [];
     if (real) parts.push(`${real} sent on WhatsApp`);
+    if (ready) parts.push(`${ready} ready to send: tap the green buttons`);
     if (simulated) parts.push(`${simulated} simulated (logged only)`);
     if (failed.length) parts.push(`${failed.length} failed: ${failed[0].status.replace(/^failed: /, '')}`);
     const to = (r.delivery as { redirect_to?: string } | undefined)?.redirect_to;

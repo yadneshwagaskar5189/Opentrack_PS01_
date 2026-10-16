@@ -89,7 +89,9 @@ CREATE TABLE students (
     city           TEXT,
     parent_name    TEXT,
     guardian_phone TEXT,
-    joined_on      TEXT NOT NULL
+    joined_on      TEXT NOT NULL,
+    real_contact   INTEGER NOT NULL DEFAULT 0           -- 1 = phone typed in by staff in the app: WhatsApp goes
+                                                        --     to it; 0 = imported sample data (made-up number)
 );
 
 CREATE TABLE enrollments (

@@ -2,15 +2,20 @@
 
 WHATSAPP_PROVIDER in .env picks how approved messages leave the building:
   off     (default) nothing is sent; the outbox marks them 'simulated'
-  twilio  Twilio WhatsApp Sandbox or a Twilio WhatsApp sender
+  link    free, no account needed: each approved message gets a "Send on WhatsApp" button that
+          opens WhatsApp (web or app) with the text already typed; staff press Send
+  twilio  Twilio WhatsApp Sandbox or a Twilio WhatsApp sender (a Twilio TRIAL account can only send
+          Twilio's own templates, so custom reminders fail with "ContentSid Required")
   meta    Meta WhatsApp Cloud API (graph.facebook.com)
+Whenever a message is not sent automatically, it still gets a "Send on WhatsApp" link (same safety rule).
 
-SAFETY: the student phone numbers in seed_data are made up and may belong to real
-strangers. So real sending ONLY goes to:
-  WHATSAPP_REDIRECT_TO=+919876543210   every message goes to this phone instead, with a
-                                       first line saying who it was meant for (demo mode), or
-  WHATSAPP_ALLOWED=+9198...,+9199...   only these numbers get real messages; others stay simulated.
-With neither set, nothing real is sent.
+WHO GETS A MESSAGE (the same rule for automatic sending and for Send on WhatsApp buttons):
+  1. Students added through the app (Add data or the copilot): their own number. Staff typed it in,
+     so it is real (students.real_contact = 1). Nothing to configure.
+  2. Numbers listed in WHATSAPP_ALLOWED=+9198...,+9199...: their own number.
+  3. Everyone else, i.e. the sample students imported from seed_data, whose numbers are made up and
+     may belong to real strangers: WHATSAPP_REDIRECT_TO=+919876543210 gets the message instead, with
+     a first line saying who it was meant for (demo mode). Without a redirect it stays simulated.
 
 WhatsApp only lets a business send free-text messages to someone who messaged it in the
 last 24 hours. With the Twilio Sandbox, sending "join <code>" from the phone counts.
@@ -38,37 +43,63 @@ def _e164(phone: str) -> str:
     return "+" + d
 
 
+def _allowed(phone: str) -> bool:
+    return _digits(_e164(phone)) in {_digits(_e164(p)) for p in config.WHATSAPP_ALLOWED}
+
+
+def target(phone: str, body: str, name: str = "", trusted: bool = False) -> tuple[str, str] | None:
+    """Who really gets this message, and the text they get. None = nobody (stays simulated).
+    trusted = the student's number was typed in by staff (added through the app)."""
+    if trusted or _allowed(phone):
+        return phone, body
+    if config.WHATSAPP_REDIRECT_TO:
+        return config.WHATSAPP_REDIRECT_TO, f"[Demo: for {name or 'student'}, {_e164(phone)}]\n{body}"
+    return None
+
+
+def link(phone: str, body: str, name: str = "", trusted: bool = False) -> dict | None:
+    """A wa.me click-to-chat link: opens WhatsApp with the message typed, a person presses Send."""
+    t = target(phone, body, name, trusted)
+    if not t:
+        return None
+    to, text = t
+    return {"to": _e164(to), "url": f"https://wa.me/{_digits(_e164(to))}?text={urllib.parse.quote(text)}"}
+
+
 def mode() -> dict:
     """What delivery will do right now (shown to staff before they approve)."""
     provider = config.WHATSAPP_PROVIDER
-    if provider not in ("twilio", "meta"):
+    redirect = _e164(config.WHATSAPP_REDIRECT_TO) if config.WHATSAPP_REDIRECT_TO else None
+    others = (f"sample students' messages go to {redirect} (demo mode)" if redirect
+              else "sample students (made-up numbers) stay simulated")
+    if provider not in ("link", "twilio", "meta"):
         return {"provider": "off", "real": False, "note": "Delivery is simulated: messages are only logged."}
-    if config.WHATSAPP_REDIRECT_TO:
-        return {"provider": provider, "real": True, "redirect_to": _e164(config.WHATSAPP_REDIRECT_TO),
-                "note": f"Demo mode: every message is really sent, but to {_e164(config.WHATSAPP_REDIRECT_TO)}."}
-    if config.WHATSAPP_ALLOWED:
-        return {"provider": provider, "real": True,
-                "note": f"Only {len(config.WHATSAPP_ALLOWED)} allowed number(s) get real messages; others are simulated."}
-    return {"provider": provider, "real": False,
-            "note": "WhatsApp is configured but no WHATSAPP_REDIRECT_TO or WHATSAPP_ALLOWED is set, so nothing real is sent."}
+    how = ("After approval, each message gets a Send on WhatsApp button" if provider == "link"
+           else f"Messages are sent automatically through {provider.title()}")
+    return {"provider": provider, "real": True, **({"redirect_to": redirect} if redirect else {}),
+            "note": f"{how}. Students added in the app get it on their own number; {others}."}
 
 
-def send(phone: str, body: str, name: str = "") -> str:
-    """Send one message. Returns the outbox status: simulated | sent ... | not sent ... | failed: ..."""
+def send(phone: str, body: str, name: str = "", trusted: bool = False) -> str:
+    """Send one message. Returns the outbox status: simulated | ready ... | sent ... | failed: ..."""
     provider = config.WHATSAPP_PROVIDER
+    if provider == "link":
+        return ("ready: press Send on WhatsApp" if target(phone, body, name, trusted)
+                else "simulated (sample number: set WHATSAPP_REDIRECT_TO)")
     if provider not in ("twilio", "meta"):
         return "simulated"
-    to = phone
-    if config.WHATSAPP_REDIRECT_TO:
-        to = config.WHATSAPP_REDIRECT_TO
-        body = f"[Demo: for {name or 'student'}, {_e164(phone)}]\n{body}"
-    elif _digits(_e164(phone)) not in {_digits(_e164(p)) for p in config.WHATSAPP_ALLOWED}:
-        return "simulated (not on the allowed list)"
+    t = target(phone, body, name, trusted)
+    if not t:
+        return "simulated (sample number: set WHATSAPP_REDIRECT_TO)"
+    to, body = t
     try:
         msg_id = _twilio(to, body) if provider == "twilio" else _meta(to, body)
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", "replace")[:300]
-        return f"failed: {provider} said {e.code} {_short_error(detail)}"
+        short = _short_error(detail)
+        if "contentsid" in short.lower():
+            short += " (a Twilio trial account only sends Twilio's own templates; use WHATSAPP_PROVIDER=link)"
+        return f"failed: {provider} said {e.code} {short}"
     except (urllib.error.URLError, TimeoutError, OSError) as e:
         return f"failed: could not reach {provider} ({e})"
     where = f" to {_e164(to)}" if to != phone else ""

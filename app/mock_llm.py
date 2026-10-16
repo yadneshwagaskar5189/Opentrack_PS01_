@@ -8,7 +8,7 @@ a fee question as a trainer still shows the guard blocking it.
 """
 import re
 
-from . import config
+from . import config, question_bank
 
 
 def _week():
@@ -117,6 +117,11 @@ ORDER BY classes_missed DESC"""
                        f"WHERE lower(student_name) LIKE '%{safe}%' AND status != 'paid' ORDER BY due_date LIMIT 1",
                 "explanation": "The next unpaid instalment for that student."}
 
+    # the 30 checked everyday questions (app/question_bank.py): fee structure, today's lectures, which trainer...
+    entry = question_bank.match(question, user["role"])
+    if entry:
+        return question_bank.plan_for(entry, user["role"], institute)
+
     if re.search(r"overdue|pending fee|defaulter", q):
         return {"type": "query", "explanation": "Overdue EMIs, biggest first.",
                 "sql": "SELECT student_name, batch_code, instalment_no, due_date, balance FROM v_instalments "
@@ -168,9 +173,8 @@ ORDER BY classes_missed DESC"""
                        f"ORDER BY day_of_week, start_hour"}
 
     return {"type": "refuse",
-            "reason": "Offline demo mode only understands a few sample questions (absences + EMIs, clashes, "
-                      "overdue fees, attendance, at-risk students, recordings, timetable). Add an LLM API key "
-                      "to ask anything."}
+            "reason": "Offline demo mode only understands the sample questions (see the question list: fees, "
+                      "today's lectures, trainers, attendance, reminders...). Add an LLM API key to ask anything."}
 
 
 PHONE = r"(?:\+?91[\s-]?)?[6-9]\d{4}[\s-]?\d{5}"

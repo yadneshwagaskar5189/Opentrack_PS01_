@@ -997,3 +997,30 @@ pre, code, kbd, .refusal-sql, .sql-code, .sql-content, .sql-line-numbers { font-
 .approval-overview { flex-wrap: wrap; row-gap: 10px; }
 .decision-authority { min-width: 0; flex: 1 1 280px; }
 .decision-authority span { white-space: normal; line-height: 1.4; }
+
+/* Send on WhatsApp (click-to-chat) buttons after approval */
+.wa-send { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; padding: 11px 12px; border: 1px solid #bfe6cf; border-radius: 12px; background: #f1fbf5; }
+.wa-send small { color: #2f6b4a; font-size: 12.5px; line-height: 1.45; }
+.wa-send-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.wa-send-button { display: inline-flex; align-items: center; gap: 7px; min-height: 36px; padding: 0 14px; border-radius: 999px; background: #1fa855; color: #fff; font-size: 13.5px; font-weight: 600; text-decoration: none; box-shadow: 0 1px 2px rgba(20, 80, 45, .25); }
+.wa-send-button:hover { background: #178a45; }
+.wa-send-button.done { background: #ffffff; color: #1f7a45; border: 1px solid #9fd6b5; box-shadow: none; }
+.wa-send-to { font-size: 11.5px; font-weight: 500; opacity: .85; padding-left: 7px; margin-left: 2px; border-left: 1px solid rgba(255, 255, 255, .45); }
+.wa-send-button.done .wa-send-to { border-left-color: #9fd6b5; }
+
+/* Question bank (Copilot page) */
+.qbank-chip { color: #8e3f2a !important; border-color: #efb181 !important; background: #fff0dc !important; font-weight: 600; }
+.qbank { display: flex; flex-direction: column; gap: 14px; }
+.qbank-intro { margin: 0; color: #7a634d; font-size: 13.5px; line-height: 1.5; }
+.qbank-search { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 12px; color: #b07a55; border: 1px solid #ead8c1; border-radius: 10px; background: #fffdf8; }
+.qbank-search:focus-within { border-color: #ee815e; box-shadow: 0 0 0 3px rgba(242,143,82,.16); }
+.qbank-search input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: #473429; font-size: 14px; }
+.qbank-list { display: flex; flex-direction: column; gap: 14px; max-height: max(220px, calc(100vh / var(--ui-zoom, 1) - 370px)); overflow-y: auto; margin-right: -6px; padding-right: 6px; scrollbar-color: #e9c99f transparent; }
+.qbank-group { display: flex; flex-direction: column; gap: 6px; }
+.qbank-group h4 { margin: 4px 0 2px; color: #b4532f; font-size: 12px; font-weight: 700; letter-spacing: .8px; text-transform: uppercase; }
+.qbank-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 2px 12px; width: 100%; padding: 10px 12px; text-align: left; color: #473429; border: 1px solid #efe2d1; border-radius: 10px; background: #fffaf3; cursor: pointer; transition: .15s; }
+.qbank-item:hover { border-color: #efb181; background: #fff0dc; }
+.qbank-item b { grid-column: 1; font-size: 14.5px; font-weight: 600; }
+.qbank-item small { grid-column: 1; color: #8a735d; font-size: 12.5px; line-height: 1.4; }
+.qbank-item svg { grid-column: 2; grid-row: 1 / span 2; color: #e4593e; }
+.qbank-empty { margin: 0; color: #8a735d; font-size: 13.5px; }

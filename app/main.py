@@ -32,6 +32,7 @@ async def lifespan(app: FastAPI):
     if _database_outdated():
         # first run (or an old database): load seed_data/*.csv, or generate sample data if there is none
         print("Building the database:", import_csv.build_demo_database().get("source", "sample data"))
+    db.upgrade()                      # add anything newer versions need, keeping all data
     yield
 
 
@@ -189,6 +190,13 @@ def me(user=Depends(current_user)):
     return {"user": user, "role_label": role["label"], "can_see_fees": role["can_see_fees"],
             "allowed_actions": role["actions"], "restrictions": rbac.ROLE_RESTRICTIONS[user["role"]],
             "data_views": role["objects"]}
+
+
+@app.get("/api/copilot/questions")
+def copilot_questions(user=Depends(current_user)):
+    """The checked everyday questions this role can ask (app/question_bank.py), grouped by topic in the app."""
+    from . import question_bank
+    return {"items": question_bank.for_role(user["role"])}
 
 
 @app.post("/api/copilot/ask")

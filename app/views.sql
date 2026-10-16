@@ -44,6 +44,54 @@ JOIN batches b  ON b.id = s.batch_id
 JOIN trainers t ON t.id = s.trainer_id
 LEFT JOIN rooms r ON r.id = s.room_id;
 
+-- ---------- Classes by date: what is taught when, by which trainer, in which room ----------
+-- One row per class, past and future:
+--   recorded classes (class_sessions, held/cancelled, with topic); the planning week's timetable
+--   (timetable_slots, incl. substitutes); other future dates from each batch's usual days and time.
+-- trainer_on_leave = 1 when the allotted trainer has leave that day. Use it for "today's lectures",
+-- "tomorrow's timetable", "which trainer is taking B01 on Monday".
+-- (No WITH clauses in views: the guard checks every read against the view that makes it.)
+CREATE VIEW v_schedule AS
+SELECT x.class_date,
+       substr('SunMonTueWedThuFriSat', 1 + 3 * CAST(strftime('%w', x.class_date) AS INTEGER), 3) AS day_name,
+       x.start_time, x.end_time, b.code AS batch_code, COALESCE(b.name, c.name) AS batch_name, c.name AS course_name,
+       x.trainer_id, t.name AS trainer_name, COALESCE(r.name, 'Online') AS room_name, b.mode,
+       x.status, x.topic, x.source,
+       EXISTS (SELECT 1 FROM trainer_leaves tl WHERE tl.trainer_id = x.trainer_id
+                AND tl.leave_date = x.class_date) AS trainer_on_leave
+FROM (
+    -- 1. classes already recorded (held or cancelled, with topic); trainer/room from the timetable if it has them
+    SELECT cs.session_date AS class_date, cs.batch_id, cs.start_time, cs.end_time,
+           COALESCE((SELECT ts.trainer_id FROM timetable_slots ts WHERE ts.batch_id = cs.batch_id
+                       AND date(ts.week_start, '+' || ts.day_of_week || ' days') = cs.session_date), b0.trainer_id) AS trainer_id,
+           COALESCE((SELECT ts.room_id FROM timetable_slots ts WHERE ts.batch_id = cs.batch_id
+                       AND date(ts.week_start, '+' || ts.day_of_week || ' days') = cs.session_date), b0.room_id) AS room_id,
+           cs.status, cs.topic, 'recorded' AS source
+    FROM class_sessions cs JOIN batches b0 ON b0.id = cs.batch_id
+    UNION ALL
+    -- 2. the planning week's timetable (includes substitutes and moved classes)
+    SELECT date(ts.week_start, '+' || ts.day_of_week || ' days'), ts.batch_id, printf('%02d:%02d', CAST(ts.start_hour AS INTEGER), CAST(ROUND((ts.start_hour - CAST(ts.start_hour AS INTEGER)) * 60) AS INTEGER)), printf('%02d:%02d', CAST(ts.end_hour AS INTEGER), CAST(ROUND((ts.end_hour - CAST(ts.end_hour AS INTEGER)) * 60) AS INTEGER)),
+           ts.trainer_id, ts.room_id, 'scheduled', NULL, 'timetable'
+    FROM timetable_slots ts
+    WHERE NOT EXISTS (SELECT 1 FROM class_sessions cs WHERE cs.batch_id = ts.batch_id AND cs.session_date = date(ts.week_start, '+' || ts.day_of_week || ' days'))
+    UNION ALL
+    -- 3. other future dates: each batch's usual days, time, trainer and room (after its last recorded class)
+    SELECT cal.d, b1.id, b1.start_time, b1.end_time, b1.trainer_id, b1.room_id, 'scheduled', NULL, 'usual schedule'
+    FROM (SELECT date((SELECT MIN(start_date) FROM batches WHERE status != 'completed'),
+                      '+' || (d1.n + 10 * d2.n + 100 * d3.n) || ' days') AS d          -- about 2.7 years of dates
+          FROM (SELECT 0 AS n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) d1, (SELECT 0 AS n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) d2, (SELECT 0 AS n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) d3) cal
+    JOIN batches b1 ON cal.d BETWEEN b1.start_date AND b1.end_date
+    WHERE b1.days IS NOT NULL AND b1.start_time IS NOT NULL
+      AND instr(',' || replace(b1.days, ' ', '') || ',',
+                ',' || substr('SunMonTueWedThuFriSat', 1 + 3 * CAST(strftime('%w', cal.d) AS INTEGER), 3) || ',') > 0
+      AND date(cal.d, '-6 days', 'weekday 1') NOT IN (SELECT week_start FROM timetable_slots)
+      AND cal.d > COALESCE((SELECT MAX(cs.session_date) FROM class_sessions cs WHERE cs.batch_id = b1.id), '')
+) x
+JOIN batches b  ON b.id = x.batch_id
+JOIN courses c  ON c.id = b.course_id
+JOIN trainers t ON t.id = x.trainer_id
+LEFT JOIN rooms r ON r.id = x.room_id;
+
 -- ---------- Student data (owner, counselor, accounts) ----------
 CREATE VIEW v_students AS
 SELECT id, name, phone, email, city, parent_name, guardian_phone, joined_on FROM students;
@@ -210,3 +258,46 @@ FROM timetable_slots s
 JOIN batches b ON b.id = s.batch_id
 LEFT JOIN rooms r ON r.id = s.room_id
 WHERE s.trainer_id = current_trainer_id();
+
+-- The same, for the logged-in trainer's own classes (including classes they cover as a substitute).
+CREATE VIEW t_my_schedule AS
+SELECT x.class_date,
+       substr('SunMonTueWedThuFriSat', 1 + 3 * CAST(strftime('%w', x.class_date) AS INTEGER), 3) AS day_name,
+       x.start_time, x.end_time, b.code AS batch_code, COALESCE(b.name, c.name) AS batch_name, c.name AS course_name,
+       x.trainer_id, t.name AS trainer_name, COALESCE(r.name, 'Online') AS room_name, b.mode,
+       x.status, x.topic, x.source,
+       EXISTS (SELECT 1 FROM trainer_leaves tl WHERE tl.trainer_id = x.trainer_id
+                AND tl.leave_date = x.class_date) AS trainer_on_leave
+FROM (
+    -- 1. classes already recorded (held or cancelled, with topic); trainer/room from the timetable if it has them
+    SELECT cs.session_date AS class_date, cs.batch_id, cs.start_time, cs.end_time,
+           COALESCE((SELECT ts.trainer_id FROM timetable_slots ts WHERE ts.batch_id = cs.batch_id
+                       AND date(ts.week_start, '+' || ts.day_of_week || ' days') = cs.session_date), b0.trainer_id) AS trainer_id,
+           COALESCE((SELECT ts.room_id FROM timetable_slots ts WHERE ts.batch_id = cs.batch_id
+                       AND date(ts.week_start, '+' || ts.day_of_week || ' days') = cs.session_date), b0.room_id) AS room_id,
+           cs.status, cs.topic, 'recorded' AS source
+    FROM class_sessions cs JOIN batches b0 ON b0.id = cs.batch_id
+    UNION ALL
+    -- 2. the planning week's timetable (includes substitutes and moved classes)
+    SELECT date(ts.week_start, '+' || ts.day_of_week || ' days'), ts.batch_id, printf('%02d:%02d', CAST(ts.start_hour AS INTEGER), CAST(ROUND((ts.start_hour - CAST(ts.start_hour AS INTEGER)) * 60) AS INTEGER)), printf('%02d:%02d', CAST(ts.end_hour AS INTEGER), CAST(ROUND((ts.end_hour - CAST(ts.end_hour AS INTEGER)) * 60) AS INTEGER)),
+           ts.trainer_id, ts.room_id, 'scheduled', NULL, 'timetable'
+    FROM timetable_slots ts
+    WHERE NOT EXISTS (SELECT 1 FROM class_sessions cs WHERE cs.batch_id = ts.batch_id AND cs.session_date = date(ts.week_start, '+' || ts.day_of_week || ' days'))
+    UNION ALL
+    -- 3. other future dates: each batch's usual days, time, trainer and room (after its last recorded class)
+    SELECT cal.d, b1.id, b1.start_time, b1.end_time, b1.trainer_id, b1.room_id, 'scheduled', NULL, 'usual schedule'
+    FROM (SELECT date((SELECT MIN(start_date) FROM batches WHERE status != 'completed'),
+                      '+' || (d1.n + 10 * d2.n + 100 * d3.n) || ' days') AS d          -- about 2.7 years of dates
+          FROM (SELECT 0 AS n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) d1, (SELECT 0 AS n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) d2, (SELECT 0 AS n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) d3) cal
+    JOIN batches b1 ON cal.d BETWEEN b1.start_date AND b1.end_date
+    WHERE b1.days IS NOT NULL AND b1.start_time IS NOT NULL
+      AND instr(',' || replace(b1.days, ' ', '') || ',',
+                ',' || substr('SunMonTueWedThuFriSat', 1 + 3 * CAST(strftime('%w', cal.d) AS INTEGER), 3) || ',') > 0
+      AND date(cal.d, '-6 days', 'weekday 1') NOT IN (SELECT week_start FROM timetable_slots)
+      AND cal.d > COALESCE((SELECT MAX(cs.session_date) FROM class_sessions cs WHERE cs.batch_id = b1.id), '')
+) x
+JOIN batches b  ON b.id = x.batch_id
+JOIN courses c  ON c.id = b.course_id
+JOIN trainers t ON t.id = x.trainer_id
+LEFT JOIN rooms r ON r.id = x.room_id
+WHERE x.trainer_id = current_trainer_id();

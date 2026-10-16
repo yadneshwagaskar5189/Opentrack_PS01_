@@ -71,10 +71,31 @@ Copilot examples: *Add Riya Shah, 9876543210, parent Sunil Shah 9822012345, to B
 
 ### Real WhatsApp messages (optional)
 
-Approved messages are logged as `simulated` until you turn on a provider in `.env` (`WHATSAPP_PROVIDER=twilio` or `meta`, see `.env.example`).
-For safety, real messages only go to `WHATSAPP_REDIRECT_TO` (every message goes to your phone, with a first line saying which student it was for) or to the numbers in `WHATSAPP_ALLOWED`; the made-up student numbers are never messaged.
+Approved messages are logged as `simulated` until you turn on a provider in `.env` (see `.env.example`):
+
+- `WHATSAPP_PROVIDER=link` (free, no account): each approved message gets a green **Send on WhatsApp** button. It opens WhatsApp Web or the app with the message already typed, and a person presses Send. Set `WHATSAPP_REDIRECT_TO` to a teammate's number for the demo.
+- `WHATSAPP_PROVIDER=twilio` or `meta`: sent automatically. A Twilio **trial** account can only send Twilio's own templates, so custom reminders fail with `ContentSid Required`; those messages still get a Send on WhatsApp button.
+
+Who gets each message:
+
+- **Students added through the app** (Add data or the copilot) get it on **their own number**. Staff typed that number in, so it is real (`students.real_contact = 1`). Nothing to configure.
+- Numbers listed in `WHATSAPP_ALLOWED` get it on their own number too.
+- **Sample students** imported from `seed_data` have made-up numbers that may belong to strangers, so they are never messaged: their message goes to `WHATSAPP_REDIRECT_TO` (for example your phone, with a first line saying which student it was for), or stays simulated if that isn't set.
+
 WhatsApp allows free-text messages only to someone who messaged you in the last 24 hours: with the Twilio Sandbox, sending `join <code>` from the phone does that.
 Each message's result (`sent to …`, `failed: …`, `simulated`) is stored in `messages_outbox`, shown on the approval card and logged in the audit log.
+
+### The copilot's 30 everyday questions (`app/question_bank.py`)
+
+The copilot knows 30 questions staff ask every day, each with a SQL answer tested on this database for every role (`tests/test_question_bank.py`):
+- **Fees:** fee structure, a course's fee and EMIs, EMIs due this week, defaulters, pending fees per batch, collection this month, one student's fee status, unmatched bank credits.
+- **Today and timetable:** today's lectures, which trainer ("sir") is taking them, what time the Java lecture is, tomorrow, the next 7 days, next week.
+- **Trainers and rooms:** a trainer's batches, who teaches which batch, classes hit by trainer leave, double bookings, free rooms.
+- **Students, attendance and academics:** batch strength, online seats left, a student's details, upcoming batches, yesterday's attendance, last-class absentees, attendance below 75%, missing submissions and recordings, certificates, and the D01 reminder.
+
+This isn't model training. For each question, the copilot puts the closest 4 checked examples that the user's role may run into the prompt, along with a glossary of how staff talk ("lec", "sir", "fee structure", "aaj", "kal"). Offline mode (`LLM_PROVIDER=mock`) answers them directly. In the app, **All N questions** on the Copilot page lists them by topic. To add a question, add an entry to `BANK` with its SQL (and a `trainer` version if trainers may ask it), then run the tests.
+
+Dates such as "today's lectures" come from the `v_schedule` view (`t_my_schedule` for trainers). It has every class by date: classes already held, the planning week's timetable (including substitutes), and each batch's usual days for other dates. It also has a `trainer_on_leave` flag.
 
 ---
 
@@ -108,6 +129,7 @@ All endpoints are under `/api`. After login, send `Authorization: Bearer <token>
 | GET | `/me` | – | user, role label, `can_see_fees`, `allowed_actions`, restrictions |
 | GET | `/dashboard` | – | role-specific numbers (see below) |
 | POST | `/copilot/ask` | `{question, history?}` | **copilot response** (below) |
+| GET | `/copilot/questions` | – | `{items: [{id, topic, question, explanation}]}`: the checked questions this role can ask |
 | GET | `/actions?status=pending` | – | `{items: [action]}` |
 | GET | `/actions/{id}` | – | action |
 | POST | `/actions/{id}/approve` | `{edits?}` | action (status `approved`, `result`) |
@@ -232,6 +254,8 @@ app/
   audit.py       audit log
   llm.py         OpenAI-compatible client (stdlib only)
   mock_llm.py    offline stand-in for demos without a key
+  question_bank.py  30 checked everyday questions: prompt examples + offline answers
+  whatsapp.py    delivery of approved messages (link buttons, Twilio, Meta)
   auth.py        PBKDF2 passwords, bearer tokens
   schema.sql     tables
   views.sql      role views
@@ -239,7 +263,7 @@ app/
   reconcile.py   bank statement vs payments
   entry.py       typing data in: previews and checks for students, payments, attendance, marks
   seed.py        generated sample institute (used only without seed_data/)
-tests/test_backend.py
+tests/test_backend.py, test_csv_import.py, test_question_bank.py
 ```
 
 ## 8. Troubleshooting

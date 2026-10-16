@@ -10,6 +10,7 @@ os.environ["DB_PATH"] = str(Path(_tmp) / "test.db")
 os.environ["LLM_PROVIDER"] = "mock"
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import io  # noqa: E402
 import urllib.parse  # noqa: E402
 
 import pytest  # noqa: E402
@@ -360,3 +361,47 @@ def test_approved_messages_record_delivery(monkeypatch):
     assert all(s["status"].startswith("sent to +919822012345") for s in done["result"]["sent"])
     assert done["result"]["delivery"]["real"] is True
     assert conn.execute("SELECT COUNT(*) FROM messages_outbox WHERE status LIKE 'sent%'").fetchone()[0] == 3
+
+
+def test_whatsapp_link_mode_gives_send_buttons(monkeypatch):
+    from app import whatsapp
+    monkeypatch.setattr(config, "WHATSAPP_PROVIDER", "link")
+    monkeypatch.setattr(config, "WHATSAPP_ALLOWED", [])
+    monkeypatch.setattr(config, "WHATSAPP_REDIRECT_TO", "")
+    assert whatsapp.send("+919734670656", "hi", "Aarav").startswith("simulated")     # nobody allowed: no link
+    assert whatsapp.link("+919734670656", "hi", "Aarav") is None
+    monkeypatch.setattr(config, "WHATSAPP_REDIRECT_TO", "+919822012345")
+    assert whatsapp.mode()["provider"] == "link" and whatsapp.mode()["real"] is True
+    counselor = user("counselor")
+    r = copilot.ask(counselor, DEMO_Q)
+    done = actions.approve(db.get_conn(), counselor, r["action"]["id"])
+    sent = done["result"]["sent"]
+    assert sent and all(s["status"].startswith("ready") for s in sent)
+    assert all(s["wa_link"].startswith("https://wa.me/919822012345?text=%5BDemo%3A%20for%20") for s in sent)
+    assert all(s["wa_to"] == "+919822012345" for s in sent)
+
+
+def test_twilio_trial_failure_still_gives_a_link(monkeypatch):
+    from app import whatsapp
+    def refuse(req, timeout=None):
+        raise whatsapp.urllib.error.HTTPError(req.full_url, 400, "Bad Request", {},
+                                              io.BytesIO(b'{"code": 21656, "message": "ContentSid Required"}'))
+    monkeypatch.setattr(whatsapp.urllib.request, "urlopen", refuse)
+    monkeypatch.setattr(config, "WHATSAPP_PROVIDER", "twilio")
+    monkeypatch.setattr(config, "TWILIO_ACCOUNT_SID", "AC1")
+    monkeypatch.setattr(config, "TWILIO_AUTH_TOKEN", "tok")
+    monkeypatch.setattr(config, "WHATSAPP_REDIRECT_TO", "+919822012345")
+    counselor = user("counselor")
+    r = copilot.ask(counselor, DEMO_Q)
+    done = actions.approve(db.get_conn(), counselor, r["action"]["id"])
+    first = done["result"]["sent"][0]
+    assert first["status"].startswith("failed: twilio said 400 ContentSid Required") and "WHATSAPP_PROVIDER=link" in first["status"]
+    assert first["wa_link"].startswith("https://wa.me/919822012345")
+
+
+def test_one_message_per_student():
+    conn = db.get_conn()
+    rows = [{"student_id": 1, "name": "Aarav", "phone": "+919734670656", "due_date": d} for d in ("2026-10-18", "2026-11-18")]
+    a = actions.propose_messages(conn, user("counselor"), rows, "Hi {name}, EMI due {due_date}")
+    assert len(a["payload"]["items"]) == 1 and a["payload"]["merged_duplicates"] == 1
+    assert a["payload"]["items"][0]["message"].endswith("18 Oct 2026")

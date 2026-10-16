@@ -57,6 +57,36 @@ def init_db(reset: bool = False) -> None:
         conn.close()
 
 
+def upgrade() -> None:
+    """Bring an existing database up to date in place (nothing is deleted)."""
+    import json
+    conn = sqlite3.connect(config.DB_PATH, timeout=10)
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(students)")}
+        if cols and "real_contact" not in cols:
+            conn.execute("ALTER TABLE students ADD COLUMN real_contact INTEGER NOT NULL DEFAULT 0")
+            # students already added through the app had their real number typed in by staff
+            for payload, result in conn.execute("SELECT payload_json, result_json FROM pending_actions "
+                                                "WHERE action_type='add_student' AND status='approved'").fetchall():
+                try:
+                    if json.loads(payload).get("existing_student_id") is None:
+                        sid = json.loads(result or "{}").get("student_id")
+                        if sid:
+                            conn.execute("UPDATE students SET real_contact=1 WHERE id=?", (sid,))
+                except ValueError:
+                    pass
+            conn.commit()
+        if cols:
+            # views hold no data: rebuild them so new or changed views (e.g. v_schedule) appear
+            for (name,) in conn.execute("SELECT name FROM sqlite_master WHERE type='view'").fetchall():
+                conn.execute(f'DROP VIEW IF EXISTS "{name}"')
+            conn.commit()
+            conn.executescript((APP_DIR / "views.sql").read_text(encoding="utf-8"))
+            conn.commit()
+    finally:
+        conn.close()
+
+
 def get_setting(conn: sqlite3.Connection, key: str, default: str = "") -> str:
     try:
         row = conn.execute("SELECT value FROM app_settings WHERE key=?", (key,)).fetchone()
