@@ -1,6 +1,6 @@
 // Shapes returned by the FastAPI backend (see the backend README, section 3).
 export type Role = 'owner' | 'counselor' | 'accounts' | 'trainer';
-export type ViewId = 'dashboard' | 'copilot' | 'approvals' | 'timetable' | 'risk' | 'students' | 'reconciliation' | 'audit';
+export type ViewId = 'dashboard' | 'copilot' | 'approvals' | 'timetable' | 'risk' | 'students' | 'entry' | 'reconciliation' | 'audit';
 
 export interface User {
   id: number;
@@ -26,6 +26,7 @@ export interface Health {
   today: string;
   institute?: string;
   plan_week?: [string, string];
+  whatsapp?: { provider: string; real: boolean; note: string; redirect_to?: string };
 }
 
 export type Row = Record<string, string | number | null>;
@@ -79,7 +80,9 @@ export interface Proposal {
   elapsed_ms: number;
 }
 
-export type ActionType = 'send_whatsapp' | 'mark_instalment_paid' | 'apply_timetable';
+export type ActionType = 'send_whatsapp' | 'mark_instalment_paid' | 'apply_timetable'
+  | 'add_student' | 'record_payment' | 'mark_attendance' | 'save_assignment';
+export const ENTRY_TYPES: ActionType[] = ['add_student', 'record_payment', 'mark_attendance', 'save_assignment'];
 export type ActionStatus = 'pending' | 'approved' | 'rejected' | 'failed';
 
 export interface Action {
@@ -91,7 +94,7 @@ export interface Action {
   title: string;
   status: ActionStatus;
   decided_at?: string | null;
-  payload: Partial<Proposal> & { items?: ActionItem[]; skipped_no_phone?: string[]; method?: string };
+  payload: Partial<Proposal> & { items?: ActionItem[]; skipped_no_phone?: string[]; method?: string; preview?: EntryPreview };
   result: Record<string, unknown> | null;
 }
 
@@ -246,4 +249,70 @@ export interface Reconciliation {
   not_in_bank: ReconLine[];
   needs_attention: number;
   method: string;
+}
+
+// ---- typing data in (forms and copilot)
+export interface EntryPreview {
+  summary: string;
+  fields: [string, string][];
+  table: { columns: string[]; rows: (string | number)[][] } | null;
+  checks: string[];
+  warnings: string[];
+}
+
+export interface EntryBatch {
+  id: number;
+  code: string;
+  name: string;
+  course_name: string;
+  mode: string;
+  status: string;
+  days: string | null;
+  start_time: string | null;
+  end_time: string | null;
+  start_date: string;
+  end_date: string;
+  online_seat_limit: number;
+  online_students: number;
+  classroom_students: number;
+  trainer_name: string;
+  room_name: string | null;
+  room_capacity?: number | null;
+}
+
+export interface EntryOptions {
+  forms: ActionType[];
+  today: string;
+  batches: EntryBatch[];
+  courses?: { code: string; name: string; total_fee: number; emi_count: number }[];
+}
+
+export interface RosterStudent { student_id: number; name: string; learning_mode: string; status?: string | null }
+
+export interface Roster {
+  batch: { id: number; code: string; name: string; days: string | null; start_time: string | null; end_time: string | null };
+  date: string;
+  usual_day: boolean | null;
+  session_id: number | null;
+  topic: string | null;
+  students: RosterStudent[];
+}
+
+export interface AssignmentsInfo {
+  batch: { id: number; code: string; name: string };
+  assignments: { id: number; title: string; due_date: string; submitted: number }[];
+  students: RosterStudent[];
+  scores: Record<string, Record<string, { score: number | null; status: string }>>;
+}
+
+export interface OpenInstalment {
+  instalment_id: number;
+  student_name: string;
+  batch_code: string;
+  instalment_no: number;
+  due_date: string;
+  amount: number;
+  paid_amount: number;
+  balance: number;
+  status: string;
 }

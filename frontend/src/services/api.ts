@@ -1,7 +1,7 @@
 // Every call to the FastAPI backend lives here. The Vite dev server forwards /api to it.
 import type {
-  Action, AuditEntry, BatchRequest, CopilotResponse, Course, Dashboard, Health, Me, PlannerResult, Reconciliation,
-  RiskReport, Role, Row, Timetable, Trainer, User,
+  Action, AssignmentsInfo, AuditEntry, BatchRequest, CopilotResponse, Course, Dashboard, EntryOptions, Health, Me,
+  OpenInstalment, PlannerResult, Reconciliation, RiskReport, Role, Roster, Row, Timetable, Trainer, User,
 } from '../types';
 
 const BASE = (import.meta.env.VITE_API_URL as string | undefined) || '/api';
@@ -103,6 +103,19 @@ export const getTrainers = () => request<{ items: Trainer[] }>('/trainers').then
 export const getCourses = () => request<{ items: Course[] }>('/courses').then((d) => d.items);
 export const getBatchRequests = () => request<{ items: BatchRequest[] }>('/timetable/requests').then((d) => d.items);
 export const getReconciliation = () => request<Reconciliation>('/fees/reconciliation');
+
+// Typing data in. Each POST only makes a preview (a pending action); approveAction() saves it.
+export const entryOptions = () => request<EntryOptions>('/entry/options');
+export const entryRoster = (batch: string, date: string) =>
+  request<Roster>(`/entry/roster?batch=${encodeURIComponent(batch)}&date=${encodeURIComponent(date)}`);
+export const entryAssignments = (batch: string) => request<AssignmentsInfo>(`/entry/assignments?batch=${encodeURIComponent(batch)}`);
+export const entryInstalments = (q: string) =>
+  request<{ items: OpenInstalment[] }>(`/entry/instalments?q=${encodeURIComponent(q)}`).then((d) => d.items);
+type Proposed = { action: Action };
+export const proposeStudent = (spec: Record<string, unknown>) => request<Proposed>('/entry/student', 'POST', spec).then((d) => d.action);
+export const proposePayment = (spec: Record<string, unknown>) => request<Proposed>('/entry/payment', 'POST', spec).then((d) => d.action);
+export const proposeAttendance = (spec: Record<string, unknown>) => request<Proposed>('/entry/attendance', 'POST', spec).then((d) => d.action);
+export const proposeAssignment = (spec: Record<string, unknown>) => request<Proposed>('/entry/assignment', 'POST', spec).then((d) => d.action);
 
 export const getAudit = (limit = 200) => request<{ items: AuditEntry[] }>(`/audit?limit=${limit}`).then((d) => d.items);
 export const getAtRisk = (level: 'medium' | 'high' = 'medium') => request<RiskReport>(`/students/at-risk?level=${level}`);

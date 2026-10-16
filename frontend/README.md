@@ -14,7 +14,7 @@ npm run dev
 Open http://localhost:5173 and pick a demo account. Requests to `/api` are forwarded to the backend by the Vite dev server.
 Backend on another laptop? Create `.env` here with `VITE_BACKEND=http://192.168.x.x:8000` and restart `npm run dev`.
 
-Projector tip: the design uses a compact type scale. Set the browser zoom to 125% (Ctrl +) for demos.
+Text size: the page scales itself up on wide screens (about 150% on a 1920px screen). Use the **A− / A+** buttons in the top bar to adjust it; the choice is remembered in that browser (`src/textSize.ts`).
 
 ## Pages
 
@@ -28,6 +28,7 @@ Projector tip: the design uses a compact type scale. Set the browser zoom to 125
 | Students at risk | `GET /students/at-risk` |
 | Students | `GET /students` |
 | Fee reconciliation (owner, accounts) | `GET /fees/reconciliation` |
+| Add data (new student, payment, attendance, marks; by role) | `GET /entry/*`, `POST /entry/*` (preview), then `POST /actions/{id}/approve` |
 | Audit log | `GET /audit` |
 
 The "View as" switcher in the header signs in as another demo role, so judges can compare permissions live.

@@ -1,7 +1,8 @@
-import type { ReactNode } from 'react';
-import { Activity, BookOpenCheck, CalendarDays, ChevronDown, ClipboardCheck, Command, GraduationCap, History, Landmark, LayoutDashboard, LogOut, Search, ShieldCheck, Sparkles, TriangleAlert, Users, UsersRound, Bell } from 'lucide-react';
+import { useState, type ReactNode } from 'react';
+import { Activity, BookOpenCheck, CalendarDays, ChevronDown, ClipboardCheck, Command, GraduationCap, History, Landmark, LayoutDashboard, LogOut, PenLine, Search, ShieldCheck, Sparkles, TriangleAlert, Users, UsersRound, Bell } from 'lucide-react';
 import type { Health, Me, Role, ViewId } from '../types';
 import { DEMO_ACCOUNTS, ROLE_ORDER } from '../services/api';
+import { canGrow, canShrink, getStep, setStep, zoomFor } from '../textSize';
 
 const navItems: { id: ViewId; label: string; icon: typeof LayoutDashboard; meta: string }[] = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, meta: '01' },
@@ -10,16 +11,17 @@ const navItems: { id: ViewId; label: string; icon: typeof LayoutDashboard; meta:
   { id: 'timetable', label: 'Timetable', icon: CalendarDays, meta: '04' },
   { id: 'risk', label: 'Students at risk', icon: TriangleAlert, meta: '05' },
   { id: 'students', label: 'Students', icon: UsersRound, meta: '06' },
-  { id: 'reconciliation', label: 'Fee reconciliation', icon: Landmark, meta: '07' },
-  { id: 'audit', label: 'Audit log', icon: History, meta: '08' },
+  { id: 'entry', label: 'Add data', icon: PenLine, meta: '07' },
+  { id: 'reconciliation', label: 'Fee reconciliation', icon: Landmark, meta: '08' },
+  { id: 'audit', label: 'Audit log', icon: History, meta: '09' },
 ];
 
 // Which pages each role sees. The backend enforces the same rules on every request.
 const accessible: Record<Role, ViewId[]> = {
-  owner: ['dashboard', 'copilot', 'approvals', 'timetable', 'risk', 'students', 'reconciliation', 'audit'],
-  counselor: ['dashboard', 'copilot', 'approvals', 'timetable', 'risk', 'students', 'audit'],
-  accounts: ['dashboard', 'copilot', 'approvals', 'students', 'reconciliation', 'audit'],
-  trainer: ['dashboard', 'copilot', 'timetable', 'risk', 'students', 'audit'],
+  owner: ['dashboard', 'copilot', 'approvals', 'timetable', 'risk', 'students', 'entry', 'reconciliation', 'audit'],
+  counselor: ['dashboard', 'copilot', 'approvals', 'timetable', 'risk', 'students', 'entry', 'audit'],
+  accounts: ['dashboard', 'copilot', 'approvals', 'students', 'entry', 'reconciliation', 'audit'],
+  trainer: ['dashboard', 'copilot', 'timetable', 'risk', 'students', 'entry', 'audit'],
 };
 
 export function allowedViews(role: Role) {
@@ -43,6 +45,8 @@ export function AppShell({ me, health, currentView, approvalsCount, onRoleChange
   const initials = me.user.display_name.split(' ').map((p) => p[0]).join('').slice(0, 2);
   const live = health && health.llm !== 'mock';
   const items = navItems.filter((item) => accessible[role].includes(item.id));
+  const [step, setStepState] = useState(getStep);
+  const resize = (next: number) => { setStep(next); setStepState(next); };
   return (
     <div className="app-frame">
       <aside className="sidebar">
@@ -84,6 +88,11 @@ export function AppShell({ me, health, currentView, approvalsCount, onRoleChange
           <div className="breadcrumbs"><span>{health?.institute ?? 'Institute'}</span><span className="slash">/</span><b>{navItems.find((n) => n.id === currentView)?.label}</b></div>
           <div className="topbar-tools">
             <span className="env-pill"><span className="live-pip" /> {live ? 'LIVE DATA' : health ? 'OFFLINE DEMO MODE' : 'CONNECTING'}</span>
+            <div className="text-size" role="group" aria-label="Text size">
+              <button onClick={() => resize(step - 1)} disabled={!canShrink(step)} aria-label="Smaller text" title="Smaller text">A−</button>
+              <span>{Math.round(zoomFor(step) * 100)}%</span>
+              <button onClick={() => resize(step + 1)} disabled={!canGrow(step)} aria-label="Larger text" title="Larger text">A+</button>
+            </div>
             <button className="icon-button search-trigger" aria-label="Ask the copilot" onClick={() => onNavigate('copilot')}>
               <Search size={16} /><span>Ask anything</span><kbd>AI</kbd>
             </button>

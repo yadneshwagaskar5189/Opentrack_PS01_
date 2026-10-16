@@ -13,6 +13,11 @@ const STATUS_LABEL: Record<string, string> = { pending: 'Pending', approved: 'Ap
 // Turns a backend action into the before/after story the card shows.
 function describe(a: Action) {
   const items = a.payload.items ?? [];
+  const pv = a.payload.preview;
+  if (pv) {
+    return { summary: pv.summary, before: 'Not saved yet', after: pv.fields.slice(0, 3).map(([k, v]) => `${k}: ${v}`).join('  ·  '),
+             rationale: [...pv.checks, ...pv.warnings].join(' · '), priority: pv.warnings.length ? 'High' : 'Normal' };
+  }
   if (a.action_type === 'send_whatsapp') {
     const names = items.map((i) => i.name).join(', ');
     return { summary: `${items.length} WhatsApp message(s) to ${names}.`, before: 'Not sent', after: `Send to ${names}`,

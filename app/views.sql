@@ -10,7 +10,7 @@ CREATE VIEW v_courses_public AS
 SELECT id, code, name, duration_weeks FROM courses;
 
 CREATE VIEW v_courses_with_fee AS
-SELECT id, code, name, duration_weeks, total_fee FROM courses;
+SELECT id, code, name, duration_weeks, total_fee, emi_count FROM courses;
 
 CREATE VIEW v_rooms AS
 SELECT id, name, capacity, has_projector FROM rooms;

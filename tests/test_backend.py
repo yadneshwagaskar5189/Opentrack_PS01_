@@ -10,6 +10,8 @@ os.environ["DB_PATH"] = str(Path(_tmp) / "test.db")
 os.environ["LLM_PROVIDER"] = "mock"
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import urllib.parse  # noqa: E402
+
 import pytest  # noqa: E402
 
 from app import actions, config, copilot, db, llm, planner, risk, seed, sql_guard, timetable  # noqa: E402
@@ -312,3 +314,49 @@ def test_http_api_smoke():
         assert r["type"] == "blocked" and "instalments" in r["blocked"]
         r = client.post("/api/security/try-sql", json={"sql": "SELECT count(*) n FROM t_my_students"}, headers=h).json()
         assert r["type"] == "answer" and r["rows"][0]["n"] > 0
+
+
+# ---------------------------------------------------------------- real WhatsApp delivery (network mocked)
+class _FakeResp:
+    def __init__(self, body): self.body = body
+    def read(self): return self.body
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+
+
+def test_whatsapp_never_messages_strangers(monkeypatch):
+    from app import whatsapp
+    calls = []
+    monkeypatch.setattr(whatsapp.urllib.request, "urlopen",
+                        lambda req, timeout=None: calls.append(req) or _FakeResp(b'{"sid": "SM123"}'))
+    monkeypatch.setattr(config, "WHATSAPP_PROVIDER", "twilio")
+    monkeypatch.setattr(config, "TWILIO_ACCOUNT_SID", "AC1")
+    monkeypatch.setattr(config, "TWILIO_AUTH_TOKEN", "tok")
+    monkeypatch.setattr(config, "WHATSAPP_REDIRECT_TO", "")
+    monkeypatch.setattr(config, "WHATSAPP_ALLOWED", [])
+    assert whatsapp.send("+919734670656", "hi", "Aarav").startswith("simulated") and not calls   # no target set
+    monkeypatch.setattr(config, "WHATSAPP_ALLOWED", ["9822012345"])
+    assert whatsapp.send("+919734670656", "hi").startswith("simulated") and not calls            # not allowed
+    assert whatsapp.send("+919822012345", "hi") == "sent (SM123)" and len(calls) == 1
+    monkeypatch.setattr(config, "WHATSAPP_REDIRECT_TO", "9822012345")
+    status = whatsapp.send("+919734670656", "Your EMI is due", "Aarav Sharma")
+    assert status.startswith("sent to +919822012345")
+    body = urllib.parse.parse_qs(calls[-1].data.decode())
+    assert body["To"] == ["whatsapp:+919822012345"] and "Aarav Sharma" in body["Body"][0]
+
+
+def test_approved_messages_record_delivery(monkeypatch):
+    from app import whatsapp
+    monkeypatch.setattr(config, "WHATSAPP_PROVIDER", "meta")
+    monkeypatch.setattr(config, "META_WA_TOKEN", "t")
+    monkeypatch.setattr(config, "META_WA_PHONE_NUMBER_ID", "123")
+    monkeypatch.setattr(config, "WHATSAPP_REDIRECT_TO", "+919822012345")
+    monkeypatch.setattr(whatsapp.urllib.request, "urlopen",
+                        lambda req, timeout=None: _FakeResp(b'{"messages": [{"id": "wamid.X"}]}'))
+    counselor = user("counselor")
+    r = copilot.ask(counselor, DEMO_Q)
+    conn = db.get_conn()
+    done = actions.approve(conn, counselor, r["action"]["id"])
+    assert all(s["status"].startswith("sent to +919822012345") for s in done["result"]["sent"])
+    assert done["result"]["delivery"]["real"] is True
+    assert conn.execute("SELECT COUNT(*) FROM messages_outbox WHERE status LIKE 'sent%'").fetchone()[0] == 3

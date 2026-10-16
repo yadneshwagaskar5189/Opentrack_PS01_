@@ -52,7 +52,8 @@ ROLES = {
             "trainers", "trainer_availability", "trainer_leaves", "certificates",
             "messages_outbox", "audit_log",
         ],
-        "actions": ["send_whatsapp", "mark_instalment_paid", "apply_timetable"],
+        "actions": ["send_whatsapp", "mark_instalment_paid", "apply_timetable",
+                    "add_student", "record_payment", "mark_attendance", "save_assignment"],
         "can_see_fees": True,
     },
     "counselor": {
@@ -62,7 +63,7 @@ ROLES = {
             "v_class_sessions", "v_attendance", "v_assignments", "v_submissions",
             "v_recordings", "v_instalments", "v_timetable", "v_certificate_eligibility",
         ],
-        "actions": ["send_whatsapp"],
+        "actions": ["send_whatsapp", "add_student"],
         "can_see_fees": True,
     },
     "accounts": {
@@ -71,7 +72,7 @@ ROLES = {
             "v_students", "v_enrollments", "v_batches", "v_courses_with_fee",
             "v_instalments", "v_fee_plans", "v_payments", "v_bank_statement",
         ],
-        "actions": ["send_whatsapp", "mark_instalment_paid"],
+        "actions": ["send_whatsapp", "mark_instalment_paid", "record_payment"],
         "can_see_fees": True,
     },
     "trainer": {
@@ -81,7 +82,7 @@ ROLES = {
             "t_my_assignments", "t_my_submissions", "t_my_recordings", "t_my_timetable",
             "v_courses_public", "v_rooms",
         ],
-        "actions": [],
+        "actions": ["mark_attendance", "save_assignment"],          # own batches only (checked in entry.py)
         "can_see_fees": False,
     },
 }
@@ -98,6 +99,10 @@ ACTION_DOCS = {
     "send_whatsapp": "Draft WhatsApp messages to students. Needs a recipient query returning student_id, name and phone columns.",
     "mark_instalment_paid": "Mark fee instalments as paid. Needs a query returning instalment id as instalment_id.",
     "apply_timetable": "Apply a re-planned timetable (created by the timetable planner).",
+    "add_student": "Add a new student and enrol them in a batch (preview first; seats and phone are checked).",
+    "record_payment": "Record a fee payment against a student's EMI: amount, method, UTR/reference.",
+    "mark_attendance": "Mark attendance for one class of a batch: everyone present unless named absent or late.",
+    "save_assignment": "Create an assignment for a batch and/or enter students' scores (0-100).",
 }
 
 

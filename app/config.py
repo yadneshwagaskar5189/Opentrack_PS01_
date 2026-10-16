@@ -33,6 +33,17 @@ LLM_TIMEOUT_S = float(os.getenv("LLM_TIMEOUT_S", "30"))
 QUERY_TIMEOUT_MS = int(os.getenv("QUERY_TIMEOUT_MS", "3000"))
 MAX_ROWS = int(os.getenv("MAX_ROWS", "200"))
 
+# ---- WhatsApp delivery of approved messages (see app/whatsapp.py). off = simulated only.
+WHATSAPP_PROVIDER = os.getenv("WHATSAPP_PROVIDER", "off").strip().lower()
+WHATSAPP_REDIRECT_TO = os.getenv("WHATSAPP_REDIRECT_TO", "").strip()     # demo: send everything to this phone
+WHATSAPP_ALLOWED = [p.strip() for p in os.getenv("WHATSAPP_ALLOWED", "").split(",") if p.strip()]
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "").strip()
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "").strip()
+TWILIO_WHATSAPP_FROM = os.getenv("TWILIO_WHATSAPP_FROM", "whatsapp:+14155238886").strip()   # Twilio sandbox number
+META_WA_TOKEN = os.getenv("META_WA_TOKEN", "").strip()
+META_WA_PHONE_NUMBER_ID = os.getenv("META_WA_PHONE_NUMBER_ID", "").strip()
+META_GRAPH_VERSION = os.getenv("META_GRAPH_VERSION", "v23.0").strip()
+
 # Institute-wide limit of simultaneous online classes (e.g. number of Zoom licences)
 ONLINE_LICENCES = int(os.getenv("ONLINE_LICENCES", "2"))
 

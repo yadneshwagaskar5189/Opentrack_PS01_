@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { ArrowRight, Check, ChevronDown, MessageCircle, ShieldCheck, XCircle } from 'lucide-react';
-import type { Action, Proposal } from '../types';
+import { ArrowRight, Check, ChevronDown, CircleAlert, MessageCircle, ShieldCheck, XCircle } from 'lucide-react';
+import type { Action, EntryPreview, Proposal } from '../types';
 import { approveAction, fmtDate, rejectAction, rupees } from '../services/api';
 import { ACTION_LABEL } from '../views/common';
 import type { ToastTone } from './Feedback';
@@ -24,6 +24,7 @@ export function ActionPreview({ action: initial, canDecide, onDecided, onToast, 
   const [reason, setReason] = useState('');
   const items = action.payload.items ?? [];
   const pending = action.status === 'pending';
+  const isEntry = Boolean(action.payload.preview);
   const included = items.length - excluded.length;
 
   async function approve() {
@@ -40,7 +41,8 @@ export function ActionPreview({ action: initial, canDecide, onDecided, onToast, 
       const updated = await approveAction(action.id, e);
       setAction(updated);
       onDecided?.(updated);
-      onToast(action.action_type === 'send_whatsapp' ? `${included} message(s) approved and logged` :
+      onToast(isEntry ? 'Saved · recorded in the audit log' :
+        action.action_type === 'send_whatsapp' ? `${included} message(s) approved and logged` :
         action.action_type === 'mark_instalment_paid' ? 'Instalment marked paid' : 'Timetable updated', 'success');
     } catch (err) {
       onToast((err as Error).message, 'error');
@@ -72,7 +74,7 @@ export function ActionPreview({ action: initial, canDecide, onDecided, onToast, 
         <span className="chat-action-icon">{action.action_type === 'send_whatsapp' ? <MessageCircle size={14} /> : <ShieldCheck size={14} />}</span>
         <div><small>{ACTION_LABEL[action.action_type]}</small><b>{action.title}</b></div>
         <span className={`status-pill ${pending ? 'status-review' : action.status === 'approved' ? 'status-ok' : 'status-bad'}`}><i />
-          {pending ? 'Waiting for approval' : action.status === 'approved' ? 'Approved' : action.status === 'rejected' ? 'Rejected' : 'Failed'}</span>
+          {pending ? (isEntry ? 'Not saved yet' : 'Waiting for approval') : action.status === 'approved' ? (isEntry ? 'Saved' : 'Approved') : action.status === 'rejected' ? (isEntry ? 'Discarded' : 'Rejected') : 'Failed'}</span>
       </div>
 
       {action.action_type === 'send_whatsapp' && (
@@ -119,17 +121,19 @@ export function ActionPreview({ action: initial, canDecide, onDecided, onToast, 
       )}
 
       {action.action_type === 'apply_timetable' && <ChangeList proposal={action.payload as Proposal} />}
+      {action.payload.preview && <EntryPreviewBody preview={action.payload.preview} />}
 
       {action.status === 'approved' && <div className="resolved-note"><Check size={12} /> {resultText(action)}</div>}
-      {action.status === 'rejected' && <div className="resolved-note"><XCircle size={12} /> Rejected. Nothing was sent or changed.</div>}
+      {action.status === 'rejected' && <div className="resolved-note"><XCircle size={12} /> {isEntry ? 'Discarded. Nothing was saved.' : 'Rejected. Nothing was sent or changed.'}</div>}
+      {action.status === 'failed' && <div className="resolved-note"><XCircle size={12} /> {String(action.result?.error ?? 'Failed. Nothing was changed.')}</div>}
 
       {pending && canDecide && !rejecting && (
         <div className="approval-actions">
           <button className="approve-action" disabled={busy || (action.action_type === 'send_whatsapp' && included === 0)} onClick={() => void approve()}>
-            <Check size={14} /> {busy ? 'Working…' : action.action_type === 'send_whatsapp' ? `Approve and send ${included}` :
+            <Check size={14} /> {busy ? 'Working…' : isEntry ? 'Confirm and save' : action.action_type === 'send_whatsapp' ? `Approve and send ${included}` :
               action.action_type === 'mark_instalment_paid' ? 'Approve and mark paid' : 'Approve and apply'}
           </button>
-          <button className="reject-action" disabled={busy} onClick={() => setRejecting(true)}><XCircle size={14} /> Reject</button>
+          <button className="reject-action" disabled={busy} onClick={() => setRejecting(true)}><XCircle size={14} /> {isEntry ? 'Discard' : 'Reject'}</button>
           {onOpenApprovals && <button className="text-button" onClick={onOpenApprovals}>Open in Approvals <ArrowRight size={12} /></button>}
         </div>
       )}
@@ -171,11 +175,38 @@ export function ChangeList({ proposal }: { proposal: Partial<Proposal> }) {
   );
 }
 
+// Fields, rows, checks and warnings of a data-entry preview (new student, payment, attendance, marks)
+export function EntryPreviewBody({ preview }: { preview: EntryPreview }) {
+  return (
+    <div className="entry-preview">
+      <p className="entry-preview-summary">{preview.summary}</p>
+      <dl className="entry-preview-fields">{preview.fields.map(([k, v]) => <div key={k}><dt>{k}</dt><dd>{v || '–'}</dd></div>)}</dl>
+      {preview.table && preview.table.rows.length > 0 && (
+        <div className="data-table-wrap"><table className="data-table compact-table">
+          <thead><tr>{preview.table.columns.map((c) => <th key={c}>{c}</th>)}</tr></thead>
+          <tbody>{preview.table.rows.map((r, i) => <tr key={i}>{r.map((v, j) => <td key={j} className={String(v) === 'absent' ? 'att-absent' : String(v) === 'late' ? 'att-late' : ''}>{v}</td>)}</tr>)}</tbody>
+        </table></div>
+      )}
+      {preview.checks.map((c) => <div key={c} className="entry-check"><Check size={12} /> {c}</div>)}
+      {preview.warnings.map((w) => <div key={w} className="entry-warning"><CircleAlert size={12} /> {w}</div>)}
+    </div>
+  );
+}
+
 export function resultText(action: Action) {
   const r = action.result ?? {};
+  if (typeof r.message === 'string') return r.message;
   if (action.action_type === 'send_whatsapp') {
-    const sent = (r.sent as unknown[] | undefined)?.length ?? 0;
-    return `${sent} message(s) logged to the outbox. Delivery is simulated in this demo.`;
+    const sent = (r.sent as { status: string }[] | undefined) ?? [];
+    const real = sent.filter((s) => s.status.startsWith('sent')).length;
+    const failed = sent.filter((s) => s.status.startsWith('failed'));
+    const simulated = sent.length - real - failed.length;
+    const parts: string[] = [];
+    if (real) parts.push(`${real} sent on WhatsApp`);
+    if (simulated) parts.push(`${simulated} simulated (logged only)`);
+    if (failed.length) parts.push(`${failed.length} failed: ${failed[0].status.replace(/^failed: /, '')}`);
+    const to = (r.delivery as { redirect_to?: string } | undefined)?.redirect_to;
+    return (parts.join(', ') || 'Nothing to send') + (real && to ? ` (demo mode: delivered to ${to})` : '') + '.';
   }
   if (action.action_type === 'mark_instalment_paid') {
     const n = (r.marked_paid as unknown[] | undefined)?.length ?? 0;

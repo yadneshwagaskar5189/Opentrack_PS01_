@@ -52,6 +52,10 @@ ORDER BY classes_missed DESC"""
         return {"type": "query", "sql": sql,
                 "explanation": f"Students who missed {n}+ classes and have an unpaid EMI due this week."}
 
+    entry_plan = _entry_plan(question, q, codes, today)
+    if entry_plan:
+        return entry_plan
+
     if re.search(r"certificate", q):
         where = f"WHERE batch_code IN ({', '.join(repr(c) for c in codes)})" if codes else "WHERE batch_status = 'completed'"
         return {"type": "query", "explanation": "Certificate check: attendance of at least 75% and fees fully paid.",
@@ -167,6 +171,77 @@ ORDER BY classes_missed DESC"""
             "reason": "Offline demo mode only understands a few sample questions (absences + EMIs, clashes, "
                       "overdue fees, attendance, at-risk students, recordings, timetable). Add an LLM API key "
                       "to ask anything."}
+
+
+PHONE = r"(?:\+?91[\s-]?)?[6-9]\d{4}[\s-]?\d{5}"
+NAME = r"[A-Za-z][A-Za-z.' ]*?[A-Za-z]"          # lazy: stops at the first word that ends the name
+
+
+def _names(text: str) -> list[str]:
+    parts = re.split(r",|\band\b|&", text or "")
+    return [p.strip(" .:;") for p in parts if re.search(r"[A-Za-z]{2}", p or "")]
+
+
+def _entry_plan(question: str, q: str, codes: list[str], today: str) -> dict | None:
+    """Requests to add data: new student, payment, attendance, assignment."""
+    named = re.findall(r"\b([A-Za-z]{1,3}\d{1,3})\b", question)        # e.g. B03 even if it isn't your batch
+    batch = codes[0] if codes else (named[0].upper() if named else None)
+    # 1. "Add Riya Shah, 9876543210, parent Sunil Shah 9822012345, to B01 online"
+    if re.match(r"\s*(add|enrol|enroll|register|admit)\b", q) and re.search(PHONE, question) and "assignment" not in q:
+        m = re.match(rf"\s*(?:add|enrol|enroll|register|admit)\s+(?:a\s+)?(?:new\s+)?(?:student\s+)?(?:named\s+)?({NAME})\s*(?:,|\(|\+|\d)",
+                     question, re.I)
+        phones = re.findall(PHONE, question)
+        parent = re.search(rf"(?:parent|father|mother|guardian)\s*(?:name)?\s*(?:is|:)?\s*({NAME})\s*[,(]?\s*(?:{PHONE}|,|$|\bto\b)",
+                           question, re.I)
+        plan = {"type": "action", "action_type": "add_student", "name": m.group(1).strip() if m else "",
+                "phone": phones[0], "batch_code": batch,
+                "learning_mode": "online" if re.search(r"\bonline\b", q) else "classroom",
+                "explanation": "A new student, enrolled after you confirm."}
+        if parent:
+            plan["parent_name"] = parent.group(1).strip()
+        if len(phones) > 1:
+            plan["parent_phone"] = phones[1]
+        return plan
+    # 2. "Record a payment of ₹11,000 from Rohan Gupta by UPI, ref 412398765012"
+    if re.search(r"\b(record|log|enter|add)\b.*\bpayment\b|\breceived\b.*\bfrom\b", q):
+        amt = re.search(r"(?:₹|rs\.?|inr)\s*([\d,]+)|payment of\s*([\d,]+)|received\s*([\d,]+)", q)
+        who = re.search(rf"\bfrom\s+({NAME})(?:'s)?\s*(?:,|\bby\b|\bvia\b|\bthrough\b|\busing\b|\bin\b|\bon\b|\bfor\b|\bref|\butr|$)",
+                        question, re.I)
+        ref = re.search(r"(?:ref(?:erence)?|utr|txn)\s*(?:no\.?|number|id)?\s*[:#]?\s*([A-Za-z0-9-]{4,})", question, re.I)
+        method = ("cash" if "cash" in q else "card" if re.search(r"\bcard\b", q) else
+                  "bank_transfer" if re.search(r"neft|imps|rtgs|bank transfer", q) else "UPI")
+        plan = {"type": "action", "action_type": "record_payment", "student_name": who.group(1).strip() if who else "",
+                "amount": int((next(g for g in amt.groups() if g) if amt else "0").replace(",", "")),
+                "method": method, "explanation": "A payment against the student's oldest unpaid EMI."}
+        if ref:
+            plan["reference"] = ref.group(1)
+        if batch:
+            plan["batch_code"] = batch
+        return plan
+    # 3. "Mark attendance for B01 today: everyone present except Aarav Sharma"
+    if re.search(r"\b(mark|take|record|enter)\b.*\battendance\b", q):
+        date = re.search(r"\d{4}-\d{2}-\d{2}", q)
+        absent = re.search(r"(?:except|absent\s*[:\-]?|apart from|but not)\s+(.+?)(?:\.\s|;|\blate\b|$)", question, re.I)
+        late = re.search(r"late\s*[:\-]?\s*(.+?)(?:\.\s|;|$)", question, re.I)
+        return {"type": "action", "action_type": "mark_attendance", "batch_code": batch,
+                "date": date.group(0) if date else ("yesterday" if "yesterday" in q else today),
+                "absent": [n for n in _names(absent.group(1) if absent else "") if not re.search(r"\blate\b", n, re.I)],
+                "late": _names(late.group(1)) if late else [],
+                "explanation": "Everyone not named is marked present."}
+    # 4. "Add assignment 'Mini project' for B01 due 2026-10-25" (+ optional "Aarav 78, Sneha 91")
+    if re.search(r"\b(add|create|set|new)\b.*\bassignment\b|\b(enter|add|record)\b.*\b(marks|scores)\b", q):
+        title = re.search(r"['\"“‘](.+?)['\"”’]", question)
+        due = re.search(r"due\s*(?:on|by)?\s*(\d{4}-\d{2}-\d{2})", q)
+        scores = dict((n.strip(), int(v)) for n, v in re.findall(rf"({NAME})\s*[:=-]?\s*(\d{{1,3}})\b", question.split(":", 1)[-1])
+                      if not re.search(r"\b(due|b\d+|assignment|for)\b", n, re.I))
+        plan = {"type": "action", "action_type": "save_assignment", "batch_code": batch,
+                "title": title.group(1) if title else "", "explanation": "An assignment saved after you confirm."}
+        if due:
+            plan["due_date"] = due.group(1)
+        if scores:
+            plan["scores"] = scores
+        return plan
+    return None
 
 
 def summarize(question: str, plan: dict, result: dict) -> str:

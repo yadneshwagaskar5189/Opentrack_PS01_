@@ -189,7 +189,7 @@ def _load(cur, d: dict, today: date) -> None:
     for r in d["courses"]:
         ins("courses", {"id": num(r["course_id"]), "code": r["course_id"], "name": r["name"],
                         "duration_weeks": int(pick(r, "duration_weeks", default="12")),
-                        "total_fee": money(r.get("total_fee"))})
+                        "total_fee": money(r.get("total_fee")), "emi_count": int(r.get("num_emis") or 1)})
     for r in d["rooms"]:
         ins("rooms", {"id": num(r["room_id"]), "name": r["name"], "capacity": int(r["capacity"]),
                       "has_projector": 0 if r.get("has_projector", "Y").upper().startswith("N") else 1})

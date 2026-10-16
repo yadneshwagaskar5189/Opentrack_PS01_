@@ -180,14 +180,19 @@ def approve(conn, user, action_id: int, edits: dict | None = None) -> dict:
                                "WHERE id=? AND status='pending'", (user["id"], now, action_id)).rowcount
         if not claimed:
             raise ActionError("This action was already decided.", 409)
-        runner = {"send_whatsapp": _run_messages, "mark_instalment_paid": _run_mark_paid,
-                  "apply_timetable": _run_timetable}[a["action_type"]]
+        from . import entry                       # data typed in through forms or the copilot
+        runners = {"send_whatsapp": _run_messages, "mark_instalment_paid": _run_mark_paid,
+                   "apply_timetable": _run_timetable, **entry.RUNNERS}
+        entry.check_scope(conn, user, a)
+        runner = runners[a["action_type"]]
         result = runner(conn, a, edits)
         conn.execute("UPDATE pending_actions SET result_json=? WHERE id=?", (json.dumps(result), action_id))
         audit.log(conn, user, "action_approved", outcome="executed",
                   detail={"action_id": action_id, "action_type": a["action_type"], **result.get("summary", {})},
                   commit=False)
         conn.commit()
+        if a["action_type"] == "send_whatsapp":
+            _deliver_queued(conn, user, action_id)   # network calls happen after the commit, never inside it
     except ActionError:
         conn.rollback()
         raise
@@ -208,18 +213,38 @@ def _run_messages(conn, a: dict, edits: dict) -> dict:
         if i in exclude:
             continue
         body = (overrides.get(i) or {}).get("message", item["message"])
-        status = deliver_whatsapp(item["phone"], body)
         conn.execute("INSERT INTO messages_outbox (action_id, channel, student_id, to_phone, body, status, created_at) "
-                     "VALUES (?,?,?,?,?,?,?)", (a["id"], "whatsapp", item.get("student_id"), item["phone"], body,
-                                                status, datetime.now().isoformat(timespec="seconds")))
-        sent.append({"name": item["name"], "phone": item["phone"], "status": status})
+                     "VALUES (?,?,?,?,?, 'queued', ?)", (a["id"], "whatsapp", item.get("student_id"), item["phone"],
+                                                         body, datetime.now().isoformat(timespec="seconds")))
+        sent.append({"name": item["name"], "phone": item["phone"], "status": "queued"})
     return {"sent": sent, "summary": {"messages": len(sent), "excluded": len(exclude)}}
 
 
-def deliver_whatsapp(phone: str, body: str) -> str:
-    """Plug a real provider in here (Twilio / Meta WhatsApp Cloud API / Gupshup).
-    For the demo, messages are recorded in messages_outbox as 'simulated'."""
-    return "simulated"
+def _deliver_queued(conn, user, action_id: int) -> None:
+    """Send the approved messages (really, or simulated: see app/whatsapp.py) and record each result."""
+    from . import whatsapp
+    rows = conn.execute("SELECT o.id, o.to_phone, o.body, s.name FROM messages_outbox o "
+                        "LEFT JOIN students s ON s.id = o.student_id WHERE o.action_id=? AND o.status='queued' "
+                        "ORDER BY o.id", (action_id,)).fetchall()
+    statuses = []
+    for r in rows:
+        status = whatsapp.send(r["to_phone"], r["body"], r["name"] or "")
+        conn.execute("UPDATE messages_outbox SET status=? WHERE id=?", (status, r["id"]))
+        statuses.append(status)
+        conn.commit()
+    row = conn.execute("SELECT result_json FROM pending_actions WHERE id=?", (action_id,)).fetchone()
+    result = json.loads(row["result_json"] or "{}")
+    for item, status in zip(result.get("sent", []), statuses):
+        item["status"] = status
+    result["delivery"] = whatsapp.mode()
+    conn.execute("UPDATE pending_actions SET result_json=? WHERE id=?", (json.dumps(result), action_id))
+    sent = sum(s.startswith("sent") for s in statuses)
+    failed = sum(s.startswith("failed") for s in statuses)
+    audit.log(conn, user, "whatsapp_delivery", outcome="sent" if sent and not failed else "failed" if failed else "simulated",
+              detail={"action_id": action_id, "sent": sent, "failed": failed,
+                      "simulated": len(statuses) - sent - failed, "provider": result["delivery"]["provider"]},
+              commit=False)
+    conn.commit()
 
 
 def _run_mark_paid(conn, a: dict, edits: dict) -> dict:

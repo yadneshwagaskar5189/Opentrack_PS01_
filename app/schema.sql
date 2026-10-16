@@ -25,7 +25,8 @@ CREATE TABLE courses (
     code           TEXT NOT NULL UNIQUE,                -- e.g. JFS
     name           TEXT NOT NULL,                       -- e.g. Java Full Stack
     duration_weeks INTEGER NOT NULL,
-    total_fee      INTEGER NOT NULL                     -- rupees
+    total_fee      INTEGER NOT NULL,                    -- rupees
+    emi_count      INTEGER NOT NULL DEFAULT 1           -- usual number of instalments
 );
 
 CREATE TABLE trainers (
@@ -250,7 +251,7 @@ CREATE TABLE messages_outbox (
     student_id INTEGER REFERENCES students(id),
     to_phone   TEXT NOT NULL,
     body       TEXT NOT NULL,
-    status     TEXT NOT NULL,                           -- simulated | sent | failed
+    status     TEXT NOT NULL,                           -- queued | simulated | sent ... | failed: ...
     created_at TEXT NOT NULL
 );
 

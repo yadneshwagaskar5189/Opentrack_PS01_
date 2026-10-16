@@ -10,12 +10,13 @@ import { RiskView } from './views/RiskView';
 import { StudentsView } from './views/StudentsView';
 import { AuditLogView } from './views/AuditLogView';
 import { ReconciliationView } from './views/ReconciliationView';
+import { DataEntryView } from './views/DataEntryView';
 import * as api from './services/api';
 import type { Health, Me, Role, ViewId } from './types';
 
 function viewFromHash(): ViewId | null {
   const v = window.location.hash.replace(/^#\/?/, '');
-  return (['dashboard', 'copilot', 'approvals', 'timetable', 'risk', 'students', 'reconciliation', 'audit'] as ViewId[]).includes(v as ViewId)
+  return (['dashboard', 'copilot', 'approvals', 'timetable', 'risk', 'students', 'entry', 'reconciliation', 'audit'] as ViewId[]).includes(v as ViewId)
     ? (v as ViewId) : null;
 }
 
@@ -116,6 +117,7 @@ export default function App() {
       {view === 'timetable' && <TimetableView {...common} health={health} />}
       {view === 'risk' && <RiskView {...common} />}
       {view === 'students' && <StudentsView {...common} />}
+      {view === 'entry' && <DataEntryView {...common} />}
       {view === 'reconciliation' && <ReconciliationView {...common} />}
       {view === 'audit' && <AuditLogView {...common} />}
       </Fragment>

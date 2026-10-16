@@ -14,4 +14,8 @@ export const ACTION_LABEL: Record<string, string> = {
   send_whatsapp: 'WhatsApp messages',
   mark_instalment_paid: 'Fee update',
   apply_timetable: 'Schedule change',
+  add_student: 'New student',
+  record_payment: 'Payment',
+  mark_attendance: 'Attendance',
+  save_assignment: 'Assignment & marks',
 };

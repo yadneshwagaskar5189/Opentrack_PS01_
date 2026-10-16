@@ -141,3 +141,87 @@ def test_d14_d15_d16_blocked(who, question):
     assert r["type"] in ("blocked", "refusal") and not r["rows"]
     conn = db.get_conn()
     assert conn.execute("SELECT COUNT(*) FROM audit_log WHERE question=?", (question,)).fetchone()[0] >= 1
+
+
+# ---------------------------------------------------------------- typing data in (forms and copilot)
+from app import entry  # noqa: E402
+
+
+def _approve(who, action):
+    conn = db.get_conn()
+    return actions.approve(conn, user(who), action["id"])
+
+
+def test_d10_add_student_and_online_seat_limit():
+    conn = db.get_conn()
+    with pytest.raises(actions.ActionError) as e:                         # 9th online student in B02
+        entry.propose_student(conn, user(COUNSELOR), {"name": "Riya Shah", "phone": "9876543210",
+                                                       "batch_code": "B02", "learning_mode": "online"})
+    assert e.value.status == 409 and "8 of 8" in e.value.message
+    a = entry.propose_student(conn, user(COUNSELOR), {"name": "riya shah", "phone": "+91 98765 43210",
+                                                       "batch_code": "B01", "learning_mode": "online"})
+    assert conn.execute("SELECT COUNT(*) FROM students WHERE phone='+919876543210'").fetchone()[0] == 0   # preview only
+    _approve(COUNSELOR, a)
+    sid = conn.execute("SELECT id FROM students WHERE phone='+919876543210'").fetchone()[0]
+    assert conn.execute("SELECT COUNT(*) FROM instalments i JOIN fee_plans fp ON fp.id=i.fee_plan_id "
+                        "JOIN enrollments e ON e.id=fp.enrollment_id WHERE e.student_id=?", (sid,)).fetchone()[0] == 5
+    with pytest.raises(actions.ActionError):
+        entry.propose_student(conn, user(ACCOUNTS), {"name": "Abc Def", "phone": "9876500000", "batch_code": "B01"})
+
+
+def test_record_payment_fixes_reconciliation():
+    conn = db.get_conn()
+    a = entry.propose_payment(conn, user(ACCOUNTS), {"student_name": "Rohan Gupta", "amount": 11000, "method": "UPI",
+                                                     "reference": "412398765012", "paid_on": "2026-10-14"})
+    assert any("BT0042" in c for c in a["payload"]["preview"]["checks"])
+    _approve(ACCOUNTS, a)
+    line = next(x for x in reconcile.reconcile(conn)["lines"] if x["payer"] == "SURESH GUPTA")
+    assert line["status"] == "matched"
+    with pytest.raises(actions.ActionError) as e:                         # same UTR twice
+        entry.propose_payment(conn, user(ACCOUNTS), {"student_name": "Rohan Gupta", "amount": 500, "method": "UPI",
+                                                     "reference": "412398765012"})
+    assert e.value.status == 409
+    with pytest.raises(actions.ActionError):
+        entry.propose_payment(conn, user(COUNSELOR), {"student_name": "Neha Verma", "amount": 10, "method": "cash"})
+
+
+def test_attendance_only_own_batches_and_saved_after_confirm():
+    conn = db.get_conn()
+    with pytest.raises(actions.ActionError) as e:
+        entry.propose_attendance(conn, user("meera@brightpath.example"), {"batch_code": "B01"})
+    assert e.value.status == 403
+    with pytest.raises(actions.ActionError):
+        entry.propose_attendance(conn, user(ACCOUNTS), {"batch_code": "B01"})
+    before = conn.execute("SELECT COUNT(*) FROM attendance WHERE student_id=1 AND status='absent'").fetchone()[0]
+    a = entry.propose_attendance(conn, user(RAHUL), {"batch_code": "B01", "absent": ["Aarav"]})
+    _approve(RAHUL, a)
+    assert conn.execute("SELECT COUNT(*) FROM attendance WHERE student_id=1 AND status='absent'").fetchone()[0] == before + 1
+
+
+def test_assignment_and_marks():
+    conn = db.get_conn()
+    a = entry.propose_assignment(conn, user(RAHUL), {"batch_code": "B01", "title": "Mini project: REST API",
+                                                      "due_date": "2026-10-25", "scores": [{"student_id": 1, "score": 78}]})
+    _approve(RAHUL, a)
+    aid = conn.execute("SELECT id FROM assignments WHERE title='Mini project: REST API'").fetchone()[0]
+    assert conn.execute("SELECT score FROM submissions WHERE assignment_id=? AND student_id=1", (aid,)).fetchone()[0] == 78
+    with pytest.raises(actions.ActionError):
+        entry.propose_assignment(conn, user(RAHUL), {"batch_code": "B01", "assignment_id": aid,
+                                                      "scores": [{"student_id": 1, "score": 120}]})
+
+
+@pytest.mark.parametrize("who,question,kind", [
+    (COUNSELOR, "Add Riya Shah, 9876543210, parent Sunil Shah 9822012345, to B01 online", "add_student"),
+    (ACCOUNTS, "Record a payment of ₹6000 from Neha Verma in cash", "record_payment"),
+    (RAHUL, "Mark attendance for B01 today: everyone present except Aarav Sharma", "mark_attendance"),
+    (RAHUL, "Add assignment 'Mini project' for B01 due 2026-10-25", "save_assignment"),
+])
+def test_copilot_makes_entry_previews(who, question, kind):
+    r = copilot.ask(user(who), question)
+    assert r["type"] == "action_preview" and r["action"]["action_type"] == kind
+    assert r["action"]["status"] == "pending"
+
+
+def test_copilot_entry_refused_outside_role():
+    assert copilot.ask(user(RAHUL), "Mark attendance for B03 today")["answer"].startswith("I couldn't prepare that")
+    assert copilot.ask(user(ACCOUNTS), "Add Riya Shah, 9876543210 to B01")["type"] == "refusal"

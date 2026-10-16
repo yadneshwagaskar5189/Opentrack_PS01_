@@ -10,7 +10,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from . import (actions, audit, auth, config, copilot, dashboard, db, import_csv, planner, rbac, reconcile,
+from . import (actions, audit, auth, config, copilot, dashboard, db, entry, import_csv, planner, rbac, reconcile,
                risk, sql_guard)
 
 
@@ -20,7 +20,9 @@ def _database_outdated() -> bool:
         return True
     conn = sqlite3.connect(config.DB_PATH)
     try:
-        return conn.execute("SELECT 1 FROM sqlite_master WHERE name='app_settings'").fetchone() is None
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE name='app_settings'").fetchone() is None:
+            return True
+        return "emi_count" not in {r[1] for r in conn.execute("PRAGMA table_info(courses)")}
     finally:
         conn.close()
 
@@ -114,13 +116,54 @@ class NewBatchIn(BaseModel):
     start_date: Optional[str] = None
 
 
+class StudentIn(BaseModel):
+    name: str = Field(..., examples=["Riya Shah"])
+    phone: str = Field(..., examples=["9876543210"])
+    batch_code: str = Field(..., examples=["B01"])
+    learning_mode: str = Field("classroom", examples=["classroom", "online"])
+    email: Optional[str] = None
+    city: Optional[str] = None
+    parent_name: Optional[str] = None
+    parent_phone: Optional[str] = None
+    instalments: Optional[int] = None
+    discount: Optional[int] = 0
+    joined_on: Optional[str] = None
+
+
+class PaymentIn(BaseModel):
+    instalment_id: Optional[int] = Field(None, description="Or give student_name (and batch_code) for the oldest unpaid EMI")
+    student_name: Optional[str] = None
+    batch_code: Optional[str] = None
+    amount: float = Field(..., examples=[11000])
+    method: str = Field("UPI", examples=["UPI", "bank_transfer", "cash", "card"])
+    reference: Optional[str] = Field(None, examples=["412398765012"])
+    paid_on: Optional[str] = None
+
+
+class AttendanceIn(BaseModel):
+    batch_code: str = Field(..., examples=["B01"])
+    date: Optional[str] = Field(None, examples=["2026-10-16"])
+    topic: Optional[str] = None
+    records: list[dict[str, Any]] = Field(default_factory=list, examples=[[{"student_id": 1, "status": "absent"}]])
+
+
+class AssignmentIn(BaseModel):
+    batch_code: str = Field(..., examples=["B01"])
+    assignment_id: Optional[int] = None
+    title: Optional[str] = Field(None, examples=["Mini project: REST API"])
+    due_date: Optional[str] = None
+    scores: list[dict[str, Any]] = Field(default_factory=list, examples=[[{"student_id": 1, "score": 78}]])
+
+
 # ---------------------------------------------------------------- routes
 @app.get("/api/health")
 def health(conn=Depends(get_db)):
+    from . import whatsapp
     ws, we = config.plan_week()
     return {"ok": True, "llm": "mock" if config.LLM_PROVIDER == "mock" else config.LLM_MODEL,
             "llm_key_set": bool(config.LLM_API_KEY), "today": config.today().isoformat(),
-            "institute": db.institute_name(conn), "plan_week": [ws.isoformat(), we.isoformat()]}
+            "institute": db.institute_name(conn), "plan_week": [ws.isoformat(), we.isoformat()],
+            "whatsapp": whatsapp.mode()}
 
 
 @app.post("/api/login")
@@ -265,6 +308,64 @@ def fee_reconciliation(user=Depends(require("owner", "accounts")), conn=Depends(
     """Bank statement vs recorded payments: matched, short-paid, duplicate, unmatched, not in bank."""
     audit.log(conn, user, "reconciliation_viewed", outcome="ok")
     return reconcile.reconcile(conn)
+
+
+# ---- typing data in: every POST only creates a preview; confirm it with /api/actions/{id}/approve
+@app.get("/api/entry/options")
+def entry_options(user=Depends(current_user), conn=Depends(get_db)):
+    return entry.options(conn, user)
+
+
+@app.get("/api/entry/roster")
+def entry_roster(batch: str, date: Optional[str] = None, user=Depends(current_user), conn=Depends(get_db)):
+    try:
+        return entry.roster(conn, user, batch, date)
+    except actions.ActionError as e:
+        _http(e)
+
+
+@app.get("/api/entry/assignments")
+def entry_assignments(batch: str, user=Depends(current_user), conn=Depends(get_db)):
+    try:
+        return entry.assignments(conn, user, batch)
+    except actions.ActionError as e:
+        _http(e)
+
+
+@app.get("/api/entry/instalments")
+def entry_instalments(q: str = "", user=Depends(current_user), conn=Depends(get_db)):
+    try:
+        return {"items": entry.open_instalments(conn, user, q)}
+    except actions.ActionError as e:
+        _http(e)
+
+
+def _propose(fn, conn, user, body: BaseModel):
+    try:
+        return {"action": fn(conn, user, body.model_dump())}
+    except actions.ActionError as e:
+        audit.log(conn, user, "entry_rejected", outcome="invalid", detail={"form": fn.__name__, "error": e.message})
+        _http(e)
+
+
+@app.post("/api/entry/student")
+def entry_student(body: StudentIn, user=Depends(current_user), conn=Depends(get_db)):
+    return _propose(entry.propose_student, conn, user, body)
+
+
+@app.post("/api/entry/payment")
+def entry_payment(body: PaymentIn, user=Depends(current_user), conn=Depends(get_db)):
+    return _propose(entry.propose_payment, conn, user, body)
+
+
+@app.post("/api/entry/attendance")
+def entry_attendance(body: AttendanceIn, user=Depends(current_user), conn=Depends(get_db)):
+    return _propose(entry.propose_attendance, conn, user, body)
+
+
+@app.post("/api/entry/assignment")
+def entry_assignment(body: AssignmentIn, user=Depends(current_user), conn=Depends(get_db)):
+    return _propose(entry.propose_assignment, conn, user, body)
 
 
 @app.get("/api/dashboard")

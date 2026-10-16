@@ -54,6 +54,28 @@ The timetable shows the week being planned: this week from Monday to Thursday, n
 | `accounts@brightpath.example` | Savita Deshpande | Accounts | Fees, payments, bank statement; no attendance or timetable |
 | `rahul@brightpath.example` (also `meera@`, `sunita@`, `amit@`, `priya@`, `vikram@`) | Rahul Deshmukh | Trainer | Only his own batches/students; **never fees or phone numbers** |
 
+### Typing data in (Add data page, or tell the copilot)
+
+The copilot itself only ever **reads**. New data goes through the same rule as every other change: a **preview first**, saved only when a person presses **Confirm and save**, and logged in the audit log. Everything is checked again at the moment of saving.
+
+| Form | Who | Checks |
+|---|---|---|
+| New student + enrolment (with EMI plan) | owner, counselor | valid Indian mobile, no duplicate phone, batch still running, **online seat limit** (a 9th online student in B02 is refused) and room size |
+| Record a payment | owner, accounts | amount not more than what's due, UTR required for UPI/bank, **same UTR can't be recorded twice**, shows whether the bank statement already has it |
+| Attendance | owner, trainer (**own batches only**) | not in the future, inside the batch's dates, warns if it's not a usual class day or replaces earlier marks |
+| Assignment & marks | owner, trainer (own batches only) | scores 0-100, students must be in the batch |
+
+Copilot examples: *Add Riya Shah, 9876543210, parent Sunil Shah 9822012345, to B01 online* · *Record a payment of ₹11,000 from Rohan Gupta by UPI, ref 412398765012* · *Mark attendance for B01 today: everyone present except Aarav Sharma* · *Add assignment 'Mini project' for B01 due 2026-10-25*.
+
+"Reset demo data" (or `python -m app.import_csv`) reloads the CSVs, so anything typed in is wiped. Handy between rehearsals.
+
+### Real WhatsApp messages (optional)
+
+Approved messages are logged as `simulated` until you turn on a provider in `.env` (`WHATSAPP_PROVIDER=twilio` or `meta`, see `.env.example`).
+For safety, real messages only go to `WHATSAPP_REDIRECT_TO` (every message goes to your phone, with a first line saying which student it was for) or to the numbers in `WHATSAPP_ALLOWED`; the made-up student numbers are never messaged.
+WhatsApp allows free-text messages only to someone who messaged you in the last 24 hours: with the Twilio Sandbox, sending `join <code>` from the phone does that.
+Each message's result (`sent to …`, `failed: …`, `simulated`) is stored in `messages_outbox`, shown on the approval card and logged in the audit log.
+
 ---
 
 ## 2. Demo script (`seed_data/demo_cases.csv`)
@@ -66,7 +88,7 @@ The timetable shows the week being planned: this week from Monday to Thursday, n
 | D07 | owner | Rahul teaches B01 and B02 | No clash reported |
 | D08 | owner | Sunita's approved leave (20–21 Oct) is flagged on B05 Tue → **Fix clashes** | Vikram Rao (Tally skill) covers Tue 17:00–19:00, students keep their slot |
 | D09 | owner | **Add a batch** → pick request NB01 | Placed with Vikram Rao, not in Room 3 at 17:00, online seats checked, each slot explained |
-| D10 | owner | *Can B02 take one more online student?* | 8 of 8 online seats used, 0 left |
+| D10 | owner / counselor | *Can B02 take one more online student?*, then **Add data → New student** in B02 online | 8 of 8 seats used; the new student is refused |
 | D11 | owner or accounts | **Fee reconciliation** page | Duplicate credit, short payment, unknown credit, father's payment (suggests Rohan Gupta), interest, payment missing from bank, garbled-name match |
 | D12 | counselor | *Which B08 students are eligible for a certificate?* | Ritu, Sameer, Anjali, Deepak; not Tanmay (attendance) or Mansi (fees) |
 | D13 | counselor | *Which classes are missing a recording?* | B01 28 Sep, B02 2 Oct |
@@ -97,6 +119,9 @@ All endpoints are under `/api`. After login, send `Authorization: Bearer <token>
 | POST | `/timetable/add-batch` | `{code, course_code, trainer_id, mode, preferred_days, start_time, session_hours, classroom_size, online_size, online_seat_limit}` | `{message, proposal, action}` (owner) |
 | GET | `/timetable/requests` | – | new-batch requests from `batch_requests.csv`, with trainers who can teach them (owner) |
 | GET | `/fees/reconciliation` | – | `{summary, lines, not_in_bank, needs_attention}` (owner, accounts) |
+| GET | `/entry/options` | – | forms this role may use, batches (trainers: own only), courses |
+| GET | `/entry/roster?batch=B01&date=2026-10-16` · `/entry/assignments?batch=B01` · `/entry/instalments?q=rohan` | – | data the forms need (role-checked) |
+| POST | `/entry/student` · `/entry/payment` · `/entry/attendance` · `/entry/assignment` | form fields | `{action}`: a **preview**; save it with `POST /actions/{id}/approve` |
 | GET | `/students/at-risk?level=medium` | – | `{students:[{name, batch_code, risk_score, level, reasons, signals}], method}` |
 | GET | `/students`, `/batches`, `/trainers`, `/rooms`, `/courses` | – | `{items, count}` (role-filtered) |
 | POST | `/admin/reset-demo` | – | reloads `seed_data/*.csv` (owner) |
@@ -212,6 +237,7 @@ app/
   views.sql      role views
   import_csv.py  loads seed_data/*.csv (python -m app.import_csv)
   reconcile.py   bank statement vs payments
+  entry.py       typing data in: previews and checks for students, payments, attendance, marks
   seed.py        generated sample institute (used only without seed_data/)
 tests/test_backend.py
 ```
