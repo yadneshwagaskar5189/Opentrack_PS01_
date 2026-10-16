@@ -1,0 +1,2 @@
+request_id,course_name,expected_students,preferred_days,preferred_window,mode,online_seats_needed,required_skill,note
+NB01,Advanced Excel,14,Tue|Thu,17:00-19:00,HYBRID,5,Excel,Use for 'new batch added' re-plan demo

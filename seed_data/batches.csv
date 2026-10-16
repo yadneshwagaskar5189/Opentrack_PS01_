@@ -1,0 +1,9 @@
+batch_id,course_id,name,trainer_id,room_id,days,start_time,end_time,start_date,end_date,status,online_seat_limit
+B01,C01,Java Full Stack - Morning,T01,R1,Mon|Wed|Fri,09:00,11:00,2026-08-17,2027-01-08,ACTIVE,10
+B02,C02,Python & Data Science - Evening,T01,R2,Mon|Wed|Fri,18:00,20:00,2026-08-24,2026-12-18,ACTIVE,8
+B03,C03,MERN - Weekend,T02,R1,Sat|Sun,10:00,13:00,2026-08-22,2026-12-13,ACTIVE,6
+B04,C04,Digital Marketing - Saturday,T02,R3,Sat,11:00,14:00,2026-08-29,2026-11-07,ACTIVE,4
+B05,C05,Tally & GST - Evening,T03,R3,Tue|Thu,17:00,19:00,2026-08-25,2026-10-22,ACTIVE,3
+B06,C06,Spoken English - Evening,T04,R2,Tue|Thu,19:00,20:30,2026-08-25,2026-10-15,ACTIVE,5
+B07,C01,Java Full Stack - Evening (NEW),T05,R1,Tue|Thu,18:00,20:00,2026-10-27,2027-03-11,UPCOMING,6
+B08,C02,Python & Data Science - Spring,T06,R4,Tue|Thu,10:00,12:00,2026-06-02,2026-09-30,COMPLETED,4

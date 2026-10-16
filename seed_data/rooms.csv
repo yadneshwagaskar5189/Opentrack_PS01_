@@ -1,0 +1,5 @@
+room_id,name,capacity,has_projector
+R1,Lab A,20,Y
+R2,Seminar Hall,25,Y
+R3,Room 3,15,Y
+R4,Room 4,12,N

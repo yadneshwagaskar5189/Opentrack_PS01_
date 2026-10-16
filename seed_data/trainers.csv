@@ -1,0 +1,7 @@
+trainer_id,name,phone,email,skills,max_hours_per_week,status
+T01,Rahul Deshmukh,9610433218,rahul@brightpath.example,Java|Python|SQL,24,ACTIVE
+T02,Meera Iyer,9896001338,meera@brightpath.example,MERN|JavaScript|Digital Marketing,24,ACTIVE
+T03,Sunita Joshi,9608386379,sunita@brightpath.example,Tally|GST|Accounting,24,ACTIVE
+T04,Amit Kulkarni,9702654235,amit@brightpath.example,Spoken English|Soft Skills,24,ACTIVE
+T05,Priya Nair,9816155940,priya@brightpath.example,Java|Spring Boot|SQL,24,ACTIVE
+T06,Vikram Rao,9678161849,vikram@brightpath.example,Python|Tally|Excel|Data Analysis,24,ACTIVE

@@ -39,8 +39,16 @@ ONLINE_LICENCES = int(os.getenv("ONLINE_LICENCES", "2"))
 CORS_ORIGINS = [o.strip() for o in os.getenv(
     "CORS_ORIGINS", "http://localhost:5173,http://localhost:3000").split(",") if o.strip()]
 
-# Freeze "today" for a stable demo, e.g. DEMO_TODAY=2026-10-17. Empty = real date.
+# Freeze "today" for a stable demo, e.g. DEMO_TODAY=2026-10-16. Empty = real date.
 DEMO_TODAY = os.getenv("DEMO_TODAY", "").strip()
+
+# Folder with the institute's CSV files (see app/import_csv.py). If it exists, the database
+# is built from it on first start and on "Reset demo data"; otherwise sample data is generated.
+SEED_DIR = os.getenv("SEED_DIR", str(ROOT / "seed_data"))
+
+# Which week the timetable shows and plans: any date inside it, e.g. PLAN_WEEK=2026-10-19.
+# Empty = this week from Monday to Thursday, next week from Friday (you plan next week on Friday).
+PLAN_WEEK = os.getenv("PLAN_WEEK", "").strip()
 
 
 def today() -> date:
@@ -52,3 +60,17 @@ def week_bounds(d: date | None = None) -> tuple[date, date]:
     d = d or today()
     monday = d - timedelta(days=d.weekday())
     return monday, monday + timedelta(days=6)
+
+
+def plan_week() -> tuple[date, date]:
+    """Monday and Sunday of the week the timetable shows and re-plans."""
+    if PLAN_WEEK:
+        return week_bounds(date.fromisoformat(PLAN_WEEK))
+    t = today()
+    return week_bounds(t + timedelta(days=7) if t.weekday() >= 4 else t)
+
+
+def due_window() -> tuple[date, date]:
+    """'This week' for fees and deadlines: today and the next 6 days."""
+    t = today()
+    return t, t + timedelta(days=6)

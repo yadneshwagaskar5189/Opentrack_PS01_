@@ -1,0 +1,11 @@
+user_id,name,role,email,trainer_id,demo_password
+U01,Kunal Phadke,owner,owner@brightpath.example,,demo123
+U02,Pooja Kulkarni,counselor,pooja@brightpath.example,,demo123
+U03,Nitin Bhosale,counselor,nitin@brightpath.example,,demo123
+U04,Savita Deshpande,accounts,accounts@brightpath.example,,demo123
+U05,Rahul Deshmukh,trainer,rahul@brightpath.example,T01,demo123
+U06,Meera Iyer,trainer,meera@brightpath.example,T02,demo123
+U07,Sunita Joshi,trainer,sunita@brightpath.example,T03,demo123
+U08,Amit Kulkarni,trainer,amit@brightpath.example,T04,demo123
+U09,Priya Nair,trainer,priya@brightpath.example,T05,demo123
+U10,Vikram Rao,trainer,vikram@brightpath.example,T06,demo123

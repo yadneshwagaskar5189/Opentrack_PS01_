@@ -1,0 +1,185 @@
+import { useState } from 'react';
+import { ArrowRight, Check, ChevronDown, MessageCircle, ShieldCheck, XCircle } from 'lucide-react';
+import type { Action, Proposal } from '../types';
+import { approveAction, fmtDate, rejectAction, rupees } from '../services/api';
+import { ACTION_LABEL } from '../views/common';
+import type { ToastTone } from './Feedback';
+
+interface Props {
+  action: Action;
+  canDecide: boolean;
+  onDecided?: (action: Action) => void;
+  onToast: (text: string, tone?: ToastTone) => void;
+  onOpenApprovals?: () => void;
+}
+
+// A proposed action inside the chat or the timetable: review, edit, then approve or reject.
+export function ActionPreview({ action: initial, canDecide, onDecided, onToast, onOpenApprovals }: Props) {
+  const [action, setAction] = useState(initial);
+  const [edits, setEdits] = useState<Record<number, string>>({});
+  const [excluded, setExcluded] = useState<number[]>([]);
+  const [method, setMethod] = useState('UPI');
+  const [busy, setBusy] = useState(false);
+  const [rejecting, setRejecting] = useState(false);
+  const [reason, setReason] = useState('');
+  const items = action.payload.items ?? [];
+  const pending = action.status === 'pending';
+  const included = items.length - excluded.length;
+
+  async function approve() {
+    setBusy(true);
+    try {
+      const e: Record<string, unknown> = {};
+      if (action.action_type === 'send_whatsapp') {
+        const changed: Record<string, { message: string }> = {};
+        Object.entries(edits).forEach(([i, msg]) => { if (msg !== items[Number(i)]?.message) changed[i] = { message: msg }; });
+        if (Object.keys(changed).length) e.items = changed;
+        if (excluded.length) e.exclude = excluded;
+      }
+      if (action.action_type === 'mark_instalment_paid') e.method = method;
+      const updated = await approveAction(action.id, e);
+      setAction(updated);
+      onDecided?.(updated);
+      onToast(action.action_type === 'send_whatsapp' ? `${included} message(s) approved and logged` :
+        action.action_type === 'mark_instalment_paid' ? 'Instalment marked paid' : 'Timetable updated', 'success');
+    } catch (err) {
+      onToast((err as Error).message, 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function reject() {
+    setBusy(true);
+    try {
+      const updated = await rejectAction(action.id, reason.trim());
+      setAction(updated);
+      setRejecting(false);
+      onDecided?.(updated);
+      onToast('Proposal rejected and recorded in the audit log', 'warning');
+    } catch (err) {
+      onToast((err as Error).message, 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const toggle = (i: number) => setExcluded((x) => (x.includes(i) ? x.filter((n) => n !== i) : [...x, i]));
+
+  return (
+    <div className={`chat-action ${pending ? 'is-pending' : 'is-decided'}`}>
+      <div className="chat-action-head">
+        <span className="chat-action-icon">{action.action_type === 'send_whatsapp' ? <MessageCircle size={14} /> : <ShieldCheck size={14} />}</span>
+        <div><small>{ACTION_LABEL[action.action_type]}</small><b>{action.title}</b></div>
+        <span className={`status-pill ${pending ? 'status-review' : action.status === 'approved' ? 'status-ok' : 'status-bad'}`}><i />
+          {pending ? 'Waiting for approval' : action.status === 'approved' ? 'Approved' : action.status === 'rejected' ? 'Rejected' : 'Failed'}</span>
+      </div>
+
+      {action.action_type === 'send_whatsapp' && (
+        <div className="chat-msg-list">
+          {items.map((it, i) => {
+            const off = excluded.includes(i);
+            return (
+              <div key={i} className={`chat-msg ${off ? 'off' : ''}`}>
+                <label className="chat-msg-to">
+                  {pending && canDecide && <input type="checkbox" checked={!off} onChange={() => toggle(i)} />}
+                  <b>{it.name}</b><span>{it.phone}</span>
+                </label>
+                {pending && canDecide
+                  ? <textarea className="form-textarea" rows={3} value={edits[i] ?? it.message ?? ''} disabled={off}
+                              onChange={(e) => setEdits({ ...edits, [i]: e.target.value })} aria-label={`Message to ${it.name}`} />
+                  : <p>{it.message}</p>}
+              </div>
+            );
+          })}
+          {(action.payload.skipped_no_phone?.length ?? 0) > 0 && (
+            <small className="chat-action-note">Skipped (no phone number): {action.payload.skipped_no_phone?.join(', ')}</small>
+          )}
+        </div>
+      )}
+
+      {action.action_type === 'mark_instalment_paid' && (
+        <div className="chat-paid">
+          {items.map((it) => (
+            <div key={it.instalment_id} className="chat-paid-row">
+              <b>{it.student_name}</b><span>Due {fmtDate(it.due_date)}</span><span className="mono-cell">{rupees(it.balance)}</span>
+            </div>
+          ))}
+          {pending && canDecide && (
+            <label className="chat-paid-method">Paid by
+              <div className="select-field small-select">
+                <select value={method} onChange={(e) => setMethod(e.target.value)}>
+                  <option value="UPI">UPI</option><option value="bank_transfer">Bank transfer</option>
+                  <option value="cash">Cash</option><option value="card">Card</option>
+                </select><ChevronDown size={13} />
+              </div>
+            </label>
+          )}
+        </div>
+      )}
+
+      {action.action_type === 'apply_timetable' && <ChangeList proposal={action.payload as Proposal} />}
+
+      {action.status === 'approved' && <div className="resolved-note"><Check size={12} /> {resultText(action)}</div>}
+      {action.status === 'rejected' && <div className="resolved-note"><XCircle size={12} /> Rejected. Nothing was sent or changed.</div>}
+
+      {pending && canDecide && !rejecting && (
+        <div className="approval-actions">
+          <button className="approve-action" disabled={busy || (action.action_type === 'send_whatsapp' && included === 0)} onClick={() => void approve()}>
+            <Check size={14} /> {busy ? 'Working…' : action.action_type === 'send_whatsapp' ? `Approve and send ${included}` :
+              action.action_type === 'mark_instalment_paid' ? 'Approve and mark paid' : 'Approve and apply'}
+          </button>
+          <button className="reject-action" disabled={busy} onClick={() => setRejecting(true)}><XCircle size={14} /> Reject</button>
+          {onOpenApprovals && <button className="text-button" onClick={onOpenApprovals}>Open in Approvals <ArrowRight size={12} /></button>}
+        </div>
+      )}
+      {pending && canDecide && rejecting && (
+        <div className="chat-reject">
+          <textarea className="form-textarea" rows={2} autoFocus placeholder="Reason (optional)" value={reason} onChange={(e) => setReason(e.target.value)} />
+          <div className="approval-actions">
+            <button className="reject-action filled-reject" disabled={busy} onClick={() => void reject()}><XCircle size={14} /> Reject proposal</button>
+            <button className="text-button" onClick={() => setRejecting(false)}>Cancel</button>
+          </div>
+        </div>
+      )}
+      {pending && !canDecide && <span className="readonly-note"><ShieldCheck size={13} /> Waiting for someone with approval rights.</span>}
+    </div>
+  );
+}
+
+export function ChangeList({ proposal }: { proposal: Partial<Proposal> }) {
+  const changes = proposal.changes ?? [];
+  return (
+    <div className="tt-change-list">
+      {changes.length === 0 && <p className="chat-action-note">No classes need to move.</p>}
+      {changes.map((c, i) => (
+        <div key={i} className="tt-change">
+          <div className="tt-change-line">
+            <b>{c.batch_code}</b>
+            <s>{c.from ?? 'new class'}</s>
+            <ArrowRight size={12} />
+            <span>{c.to ?? 'removed'}</span>
+          </div>
+          <small>{c.reason}</small>
+        </div>
+      ))}
+      {(proposal.unscheduled?.length ?? 0) > 0 && (
+        <div className="tt-unscheduled">Could not place: {proposal.unscheduled?.map((u) => `${u.batch_code} (${u.reason})`).join('; ')}</div>
+      )}
+      {proposal.elapsed_ms !== undefined && <small className="chat-action-note">Planned in {proposal.elapsed_ms} ms. Every other class stays where it is.</small>}
+    </div>
+  );
+}
+
+export function resultText(action: Action) {
+  const r = action.result ?? {};
+  if (action.action_type === 'send_whatsapp') {
+    const sent = (r.sent as unknown[] | undefined)?.length ?? 0;
+    return `${sent} message(s) logged to the outbox. Delivery is simulated in this demo.`;
+  }
+  if (action.action_type === 'mark_instalment_paid') {
+    const n = (r.marked_paid as unknown[] | undefined)?.length ?? 0;
+    return `${n} instalment(s) marked paid and a payment recorded.`;
+  }
+  return `Timetable updated: ${String(r.applied_slots ?? '')} classes this week.`;
+}

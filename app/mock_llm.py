@@ -12,7 +12,7 @@ from . import config
 
 
 def _week():
-    ws, we = config.week_bounds()
+    ws, we = config.due_window()
     return ws.isoformat(), we.isoformat()
 
 
@@ -22,7 +22,12 @@ def plan(question: str, user: dict, context: dict) -> dict:
     ws, we = _week()
     today = config.today().isoformat()
     java = "java" in q
-    course_filter = "AND e.course_name LIKE '%Java%'" if java else ""
+    institute = context.get("institute") or "the institute"
+    codes = [b["code"] for b in context.get("batches", []) if re.search(rf"\b{re.escape(b['code'].lower())}\b", q)]
+    if codes:
+        course_filter = "AND e.batch_code IN (" + ", ".join(f"'{c}'" for c in codes) + ")"
+    else:
+        course_filter = "AND e.course_name LIKE '%Java%'" if java else ""
 
     if re.search(r"\b(miss|missed|absent|absence)", q) and re.search(r"emi|instal|fee|due", q):
         n = int(m.group(1)) if (m := re.search(r"(\d+)\s*(or more|\+)?\s*class", q)) else 3
@@ -39,13 +44,42 @@ ORDER BY classes_missed DESC"""
         if re.search(r"draft|remind|whatsapp|message|send", q):
             return {"type": "action", "action_type": "send_whatsapp", "sql": sql,
                     "title": "EMI + attendance reminder",
-                    "message_template": ("Hi {name}, this is TechSummit Trainers. We noticed you've missed "
+                    "message_template": ("Hi {name}, this is " + institute + ". We noticed you've missed "
                                          "{classes_missed} classes in {batch_code}, and your EMI of ₹{amount_due} "
                                          "is due on {due_date}. Recordings are on the portal; do reach out if "
                                          "you need help catching up or with the payment. Thank you!"),
                     "explanation": f"Students who missed {n}+ classes and have an unpaid EMI due this week."}
         return {"type": "query", "sql": sql,
                 "explanation": f"Students who missed {n}+ classes and have an unpaid EMI due this week."}
+
+    if re.search(r"certificate", q):
+        where = f"WHERE batch_code IN ({', '.join(repr(c) for c in codes)})" if codes else "WHERE batch_status = 'completed'"
+        return {"type": "query", "explanation": "Certificate check: attendance of at least 75% and fees fully paid.",
+                "sql": "SELECT student_name, batch_code, attendance_pct, fee_balance, eligible, reason "
+                       f"FROM v_certificate_eligibility {where} ORDER BY eligible DESC, student_name"}
+
+    if "recording" in q and re.search(r"missing|without|no recording|not uploaded|not recorded", q):
+        sess, rec = ("t_my_sessions", "t_my_recordings") if trainer else ("v_class_sessions", "v_recordings")
+        if trainer:
+            sql = (f"SELECT s.batch_code, s.session_date, s.topic FROM {sess} s WHERE NOT EXISTS "
+                   f"(SELECT 1 FROM {rec} r WHERE r.batch_code = s.batch_code AND r.session_date = s.session_date) "
+                   f"AND s.session_date < '{today}' ORDER BY s.batch_code, s.session_date")
+        else:
+            sql = (f"SELECT s.batch_code, s.session_date, s.topic FROM {sess} s LEFT JOIN {rec} r ON r.session_id = s.id "
+                   f"WHERE r.id IS NULL AND s.session_date < '{today}' ORDER BY s.batch_code, s.session_date")
+        return {"type": "query", "explanation": "Classes already held that have no recording uploaded.", "sql": sql}
+
+    if re.search(r"bank|reconcil|utr|unmatched", q):
+        return {"type": "query", "explanation": "Bank credits with no matching payment reference.",
+                "sql": "SELECT b.txn_date, b.description, b.credit, b.utr FROM v_bank_statement b "
+                       "LEFT JOIN v_payments p ON p.reference = b.utr WHERE p.id IS NULL ORDER BY b.txn_date"}
+
+    if re.search(r"seat", q) or (re.search(r"online", q) and re.search(r"one more|another|room|space|full|9th|add", q)):
+        view = "t_my_batches" if trainer else "v_batches"
+        where = f"WHERE code IN ({', '.join(repr(c) for c in codes)})" if codes else "WHERE status = 'active'"
+        return {"type": "query", "explanation": "Online seats used and left per batch.",
+                "sql": f"SELECT code, online_seat_limit, online_students, online_seat_limit - online_students AS online_seats_left "
+                       f"FROM {view} {where} ORDER BY online_seats_left"}
 
     if re.search(r"double|clash|conflict|overlap", q):
         if trainer:
@@ -54,8 +88,8 @@ ORDER BY classes_missed DESC"""
                            "FROM t_my_timetable a JOIN t_my_timetable b ON a.day_of_week=b.day_of_week "
                            "AND a.id<b.id AND a.start_hour<b.end_hour AND b.start_hour<a.end_hour"}
         return {"type": "query", "explanation": "Trainers booked for two classes at the same time this week.",
-                "sql": "SELECT a.trainer_name, a.day_name, a.start_hour || ':00' AS starts, a.batch_code AS class_1, "
-                       "b.batch_code AS class_2 FROM v_timetable a JOIN v_timetable b ON a.trainer_id=b.trainer_id "
+                "sql": "SELECT a.trainer_name, a.day_name, a.batch_code AS class_1, a.start_hour AS class_1_start, a.end_hour AS class_1_end, "
+                       "b.batch_code AS class_2, b.start_hour AS class_2_start, b.end_hour AS class_2_end FROM v_timetable a JOIN v_timetable b ON a.trainer_id=b.trainer_id "
                        "AND a.day_of_week=b.day_of_week AND a.id<b.id AND a.start_hour<b.end_hour "
                        "AND b.start_hour<a.end_hour ORDER BY a.day_of_week"}
 
@@ -88,6 +122,13 @@ ORDER BY classes_missed DESC"""
         return {"type": "query", "explanation": "Fee instalments due this week.",
                 "sql": f"SELECT student_name, batch_code, due_date, balance FROM v_instalments WHERE status != 'paid' "
                        f"AND due_date BETWEEN '{ws}' AND '{we}' ORDER BY due_date"}
+
+    if re.search(r"missed the most|most absen|absent the most|missed most", q):
+        view = "t_my_attendance" if trainer else "v_attendance"
+        return {"type": "query", "explanation": "Students with the most missed classes.",
+                "sql": f"SELECT student_name, batch_code, SUM(status = 'absent') AS classes_missed, COUNT(*) AS classes_held "
+                       f"FROM {view} GROUP BY student_id, batch_code HAVING classes_missed > 0 "
+                       f"ORDER BY classes_missed DESC LIMIT 10"}
 
     if re.search(r"attendance", q):
         view = "t_my_attendance" if trainer else "v_attendance"

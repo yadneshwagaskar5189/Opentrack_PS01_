@@ -252,12 +252,22 @@ def _run_timetable(conn, a: dict, edits: dict) -> dict:
     new_id = None
     if p.get("new_batch"):
         nb = p["new_batch"]
+        if conn.execute("SELECT 1 FROM batches WHERE code=?", (nb["code"],)).fetchone():
+            raise ActionError(f"A batch called {nb['code']} already exists.", 409)
         course = conn.execute("SELECT id FROM courses WHERE code=?", (nb["course_code"],)).fetchone()
+        mine = sorted((s for s in p["slots"] if s["batch_id"] < 0), key=lambda s: s["day_of_week"])
+        status = "upcoming" if nb["start_date"] > config.today().isoformat() else "active"
+        same_time = bool(mine) and len({(s["start_hour"], s["end_hour"]) for s in mine}) == 1
         cur = conn.execute(
-            "INSERT INTO batches (code, course_id, trainer_id, mode, time_window, sessions_per_week, session_hours, "
-            "online_seat_limit, start_date, end_date, status) VALUES (?,?,?,?,?,?,?,?,?,?, 'active')",
-            (nb["code"], course["id"], nb["trainer_id"], nb["mode"], nb["time_window"], nb["sessions_per_week"],
-             nb.get("session_hours", 2), nb.get("online_seat_limit", 0), nb["start_date"], nb["end_date"]))
+            "INSERT INTO batches (code, name, course_id, trainer_id, mode, time_window, sessions_per_week, session_hours, "
+            "online_seat_limit, days, start_time, end_time, room_id, start_date, end_date, status) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (nb["code"], nb.get("name"), course["id"], nb["trainer_id"], nb["mode"], nb["time_window"],
+             nb["sessions_per_week"], nb.get("session_hours", 2), nb.get("online_seat_limit", 0),
+             ",".join(timetable.DAY_NAMES[s["day_of_week"]] for s in mine) or None,
+             timetable.hm(mine[0]["start_hour"]) if same_time else None,      # only if every class
+             timetable.hm(mine[0]["end_hour"]) if same_time else None,        # starts at the same time
+             mine[0]["room_id"] if mine else None, nb["start_date"], nb["end_date"], status))
         new_id = cur.lastrowid
     for lv in p.get("leaves", []):
         conn.execute("INSERT INTO trainer_leaves (trainer_id, leave_date, reason) VALUES (?,?,?)",

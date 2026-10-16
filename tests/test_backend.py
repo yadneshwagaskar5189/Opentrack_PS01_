@@ -209,7 +209,7 @@ def test_mark_paid_flow():
 
 # ---------------------------------------------------------------- timetable
 def _violations(conn):
-    ws = config.week_bounds()[0]
+    ws = config.plan_week()[0]
     return timetable.find_violations(timetable.load_context(conn, ws), timetable.load_slots(conn, ws))
 
 
@@ -228,7 +228,7 @@ def test_trainer_unavailable_moves_only_affected_classes():
     conn = db.get_conn()
     owner = user("owner")
     actions.approve(conn, owner, planner.propose_fix(conn, owner)["action"]["id"])
-    before = timetable.load_slots(conn, config.week_bounds()[0])
+    before = timetable.load_slots(conn, config.plan_week()[0])
     out = planner.propose_trainer_unavailable(conn, owner, 1, ["Wed"], "sick")
     p = out["proposal"]
     assert p["violations_after"] == [] and p["elapsed_ms"] < 2000
@@ -306,3 +306,9 @@ def test_http_api_smoke():
         assert client.post(f"/api/actions/{fix['action']['id']}/approve", headers=h, json={}).json()["status"] == "approved"
         assert client.get("/api/students", headers=h).json()["count"] > 100
         assert client.get("/api/students/at-risk", headers=h).json()["students"]
+        tok = client.post("/api/login", json={"username": "priya", "password": "trainer123"}).json()["token"]
+        h = {"Authorization": f"Bearer {tok}"}
+        r = client.post("/api/security/try-sql", json={"sql": "SELECT * FROM instalments"}, headers=h).json()
+        assert r["type"] == "blocked" and "instalments" in r["blocked"]
+        r = client.post("/api/security/try-sql", json={"sql": "SELECT count(*) n FROM t_my_students"}, headers=h).json()
+        assert r["type"] == "answer" and r["rows"][0]["n"] > 0

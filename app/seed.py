@@ -196,8 +196,9 @@ def seed() -> dict:
     dropped["dropped"] = True
     conn.commit()
 
-    # ---- weekly pattern from the planner (clash-free)
-    ctx = timetable.load_context(conn, week_start)
+    # ---- weekly pattern from the planner (clash-free), for the week the timetable shows
+    plan_start = config.plan_week()[0]
+    ctx = timetable.load_context(conn, plan_start)
     result = timetable.plan(ctx, [])
     assert not result["unscheduled"], result["unscheduled"]
     pattern = result["slots"]
@@ -342,7 +343,7 @@ def seed() -> dict:
             clash_note = (f"JAVA-EVE-02 moved onto {timetable.fmt_slot(target['day_of_week'], target['start_hour'], target['end_hour'])}, "
                           f"same time as Priya's JAVA-MOR-01")
             break
-    timetable.save_slots(conn, week_start, slots)
+    timetable.save_slots(conn, plan_start, slots)
 
     # ---- users
     users = [
@@ -359,6 +360,7 @@ def seed() -> dict:
     for u, p, role, name, tid in users:
         cur.execute("INSERT INTO users (username, password_hash, role, display_name, trainer_id) VALUES (?,?,?,?,?)",
                     (u, hash_password(p), role, name, tid))
+    cur.execute("INSERT INTO app_settings (key, value) VALUES ('institute_name', 'TechSummit Trainers')")
     cur.execute("INSERT INTO audit_log (ts, event_type, outcome, detail_json) VALUES (?,?,?,?)",
                 (datetime.now().isoformat(timespec="seconds"), "seed", "ok",
                  f'{{"today": "{today.isoformat()}"}}'))

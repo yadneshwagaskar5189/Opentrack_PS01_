@@ -33,10 +33,10 @@ CREATE TABLE trainers (
     name   TEXT NOT NULL,
     email  TEXT,
     phone  TEXT,
-    skills TEXT NOT NULL                                -- comma list of course codes, e.g. 'JFS,SPR'
+    skills TEXT NOT NULL      -- comma list: course codes ('JFS,SPR') or skill words found in course names ('Java,SQL')
 );
 
--- Weekly availability. day_of_week: 0=Mon ... 6=Sun. Hours are 24h clock.
+-- Weekly availability. day_of_week: 0=Mon ... 6=Sun. Hours are 24h clock (19.5 = 19:30).
 CREATE TABLE trainer_availability (
     id          INTEGER PRIMARY KEY,
     trainer_id  INTEGER NOT NULL REFERENCES trainers(id),
@@ -54,21 +54,27 @@ CREATE TABLE trainer_leaves (
 );
 
 CREATE TABLE rooms (
-    id       INTEGER PRIMARY KEY,
-    name     TEXT NOT NULL,
-    capacity INTEGER NOT NULL
+    id            INTEGER PRIMARY KEY,
+    name          TEXT NOT NULL,
+    capacity      INTEGER NOT NULL,
+    has_projector INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE batches (
     id                INTEGER PRIMARY KEY,
-    code              TEXT NOT NULL UNIQUE,             -- e.g. JAVA-MOR-01
+    code              TEXT NOT NULL UNIQUE,             -- e.g. JAVA-MOR-01 or B01
+    name              TEXT,                             -- e.g. Java Full Stack - Morning
     course_id         INTEGER NOT NULL REFERENCES courses(id),
     trainer_id        INTEGER NOT NULL REFERENCES trainers(id),
     mode              TEXT NOT NULL CHECK (mode IN ('classroom','online','hybrid')),
     time_window       TEXT NOT NULL CHECK (time_window IN ('morning','afternoon','evening','weekend')),
     sessions_per_week INTEGER NOT NULL,
-    session_hours     INTEGER NOT NULL DEFAULT 2,
+    session_hours     INTEGER NOT NULL DEFAULT 2,       -- may be fractional, e.g. 1.5
     online_seat_limit INTEGER NOT NULL DEFAULT 0,       -- max online participants (online/hybrid)
+    days              TEXT,                             -- usual days, e.g. 'Mon,Wed,Fri'
+    start_time        TEXT,                             -- usual start, HH:MM
+    end_time          TEXT,                             -- usual end, HH:MM
+    room_id           INTEGER REFERENCES rooms(id),     -- usual room
     start_date        TEXT NOT NULL,
     end_date          TEXT NOT NULL,
     status            TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('upcoming','active','completed'))
@@ -80,6 +86,7 @@ CREATE TABLE students (
     phone          TEXT NOT NULL,                       -- +91XXXXXXXXXX
     email          TEXT,
     city           TEXT,
+    parent_name    TEXT,
     guardian_phone TEXT,
     joined_on      TEXT NOT NULL
 );
@@ -135,7 +142,8 @@ CREATE TABLE submissions (
     assignment_id INTEGER NOT NULL REFERENCES assignments(id),
     student_id    INTEGER NOT NULL REFERENCES students(id),
     submitted_on  TEXT NOT NULL,
-    score         INTEGER                               -- out of 100
+    score         INTEGER,                              -- out of 100
+    status        TEXT NOT NULL DEFAULT 'submitted' CHECK (status IN ('submitted','late'))
 );
 
 CREATE TABLE certificates (
@@ -176,6 +184,17 @@ CREATE TABLE payments (
     reference     TEXT                                  -- UPI ref / UTR
 );
 
+-- Bank statement lines, for fee reconciliation (owner and accounts only)
+CREATE TABLE bank_transactions (
+    id          INTEGER PRIMARY KEY,
+    txn_ref     TEXT,                                   -- bank's own id, e.g. BT0042
+    txn_date    TEXT NOT NULL,
+    description TEXT NOT NULL,                          -- e.g. UPI/412398765012/SURESH GUPTA
+    credit      INTEGER NOT NULL,
+    utr         TEXT,                                   -- UPI ref / UTR, matches payments.reference
+    balance     INTEGER
+);
+
 -- ---------- Timetable ----------
 CREATE TABLE timetable_slots (
     id          INTEGER PRIMARY KEY,
@@ -187,6 +206,27 @@ CREATE TABLE timetable_slots (
     start_hour  INTEGER NOT NULL,
     end_hour    INTEGER NOT NULL,
     is_online   INTEGER NOT NULL DEFAULT 0              -- 1 if an online licence is used
+);
+
+-- Requests for new batches, waiting to be scheduled
+CREATE TABLE batch_requests (
+    id                  INTEGER PRIMARY KEY,
+    code                TEXT NOT NULL,                  -- e.g. NB01
+    course_name         TEXT NOT NULL,
+    expected_students   INTEGER NOT NULL,
+    online_seats_needed INTEGER NOT NULL DEFAULT 0,
+    preferred_days      TEXT,                           -- e.g. 'Tue,Thu'
+    preferred_start     TEXT,                           -- HH:MM
+    preferred_end       TEXT,
+    mode                TEXT,
+    required_skill      TEXT,
+    note                TEXT
+);
+
+-- Small key/value settings, e.g. the institute's name
+CREATE TABLE app_settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT
 );
 
 -- ---------- Copilot governance ----------

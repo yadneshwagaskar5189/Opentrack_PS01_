@@ -20,7 +20,9 @@ def _register_functions(conn: sqlite3.Connection, trainer_id: int | None) -> Non
 
 
 def get_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(config.DB_PATH, timeout=10)
+    # FastAPI may open the connection (in a dependency) on one worker thread and use it on another.
+    # Each request still gets its own connection, so turning off the same-thread check is safe.
+    conn = sqlite3.connect(config.DB_PATH, timeout=10, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     _register_functions(conn, None)
@@ -53,6 +55,18 @@ def init_db(reset: bool = False) -> None:
         conn.commit()
     finally:
         conn.close()
+
+
+def get_setting(conn: sqlite3.Connection, key: str, default: str = "") -> str:
+    try:
+        row = conn.execute("SELECT value FROM app_settings WHERE key=?", (key,)).fetchone()
+    except sqlite3.OperationalError:        # database from an older version
+        return default
+    return row[0] if row and row[0] else default
+
+
+def institute_name(conn: sqlite3.Connection) -> str:
+    return get_setting(conn, "institute_name", "the institute")
 
 
 def rows_to_dicts(rows) -> list[dict]:

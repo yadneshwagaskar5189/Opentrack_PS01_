@@ -1,6 +1,7 @@
 """FastAPI app. Run:  uvicorn app.main:app --reload --port 8000
 Interactive API docs: http://localhost:8000/docs
 """
+import sqlite3
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Optional
@@ -9,14 +10,26 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from . import (actions, audit, auth, config, copilot, dashboard, db, planner, rbac, risk,
-               seed, sql_guard)
+from . import (actions, audit, auth, config, copilot, dashboard, db, import_csv, planner, rbac, reconcile,
+               risk, sql_guard)
+
+
+def _database_outdated() -> bool:
+    """True if the database is missing or was made by an older version of this backend."""
+    if not Path(config.DB_PATH).exists():
+        return True
+    conn = sqlite3.connect(config.DB_PATH)
+    try:
+        return conn.execute("SELECT 1 FROM sqlite_master WHERE name='app_settings'").fetchone() is None
+    finally:
+        conn.close()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    if not Path(config.DB_PATH).exists():
-        seed.seed()          # first run: create the demo institute automatically
+    if _database_outdated():
+        # first run (or an old database): load seed_data/*.csv, or generate sample data if there is none
+        print("Building the database:", import_csv.build_demo_database().get("source", "sample data"))
     yield
 
 
@@ -85,12 +98,16 @@ class UnavailableIn(BaseModel):
 
 
 class NewBatchIn(BaseModel):
-    code: str = Field(..., examples=["DEVOPS-02"])
-    course_code: str = Field(..., examples=["DVO"])
-    trainer_id: int = Field(..., examples=[4])
+    code: str = Field(..., examples=["NB01"])
+    course_code: str = Field(..., examples=["C07"])
+    trainer_id: int = Field(..., examples=[6])
+    name: Optional[str] = None
     mode: str = Field("hybrid", examples=["classroom", "online", "hybrid"])
-    time_window: str = Field("evening", examples=["morning", "afternoon", "evening", "weekend"])
-    sessions_per_week: int = 2
+    time_window: Optional[str] = Field(None, examples=["morning", "afternoon", "evening", "weekend"])
+    preferred_days: Optional[list[Any]] = Field(None, examples=[["Tue", "Thu"]])
+    start_time: Optional[str] = Field(None, examples=["17:00"])
+    session_hours: Optional[float] = Field(None, examples=[2])
+    sessions_per_week: Optional[int] = None
     classroom_size: Optional[int] = None
     online_size: Optional[int] = None
     online_seat_limit: Optional[int] = None
@@ -99,9 +116,11 @@ class NewBatchIn(BaseModel):
 
 # ---------------------------------------------------------------- routes
 @app.get("/api/health")
-def health():
+def health(conn=Depends(get_db)):
+    ws, we = config.plan_week()
     return {"ok": True, "llm": "mock" if config.LLM_PROVIDER == "mock" else config.LLM_MODEL,
-            "llm_key_set": bool(config.LLM_API_KEY), "today": config.today().isoformat()}
+            "llm_key_set": bool(config.LLM_API_KEY), "today": config.today().isoformat(),
+            "institute": db.institute_name(conn), "plan_week": [ws.isoformat(), we.isoformat()]}
 
 
 @app.post("/api/login")
@@ -132,6 +151,30 @@ def me(user=Depends(current_user)):
 @app.post("/api/copilot/ask")
 def ask(body: AskIn, user=Depends(current_user)):
     return copilot.ask(user, body.question, body.history)
+
+
+class TrySqlIn(BaseModel):
+    sql: str = Field(..., examples=["SELECT * FROM instalments"])
+
+
+@app.post("/api/security/try-sql")
+def try_sql(body: TrySqlIn, user=Depends(current_user), conn=Depends(get_db)):
+    """Run raw SQL through the database guard with no AI involved. Proves the security
+    does not depend on the AI: anything outside the user's role is refused by the database."""
+    try:
+        r = sql_guard.run_query(body.sql, user)
+    except sql_guard.GuardError as e:
+        aid = audit.log(conn, user, "query_blocked", question="[direct SQL test, no AI]", sql=body.sql,
+                        outcome="blocked_by_guard", detail={"blocked": e.blocked, "code": e.code, "message": e.message})
+        return {"type": "blocked", "answer": e.message, "sql": body.sql, "explanation": "Raw SQL sent straight to the database guard.",
+                "columns": [], "rows": [], "row_count": 0, "truncated": False, "objects_read": [],
+                "blocked": e.blocked or [e.code], "audit_id": aid}
+    aid = audit.log(conn, user, "query_ok", question="[direct SQL test, no AI]", sql=r["sql"], outcome="allowed",
+                    detail={"rows": r["row_count"], "objects_read": r["objects_read"]})
+    return {"type": "answer", "answer": f"Allowed for your role: {r['row_count']} row(s).", "sql": r["sql"],
+            "explanation": "Raw SQL sent straight to the database guard.", "columns": r["columns"],
+            "rows": r["rows"][:50], "row_count": r["row_count"], "truncated": r["truncated"] or r["row_count"] > 50,
+            "objects_read": r["objects_read"], "blocked": [], "audit_id": aid}
 
 
 @app.get("/api/actions")
@@ -193,6 +236,12 @@ def trainer_unavailable(body: UnavailableIn, user=Depends(require("owner")), con
         _http(e)
 
 
+@app.get("/api/timetable/requests")
+def timetable_requests(user=Depends(require("owner")), conn=Depends(get_db)):
+    """New-batch requests from the data (e.g. NB01), ready to pre-fill 'Add a batch'."""
+    return {"items": planner.batch_requests(conn)}
+
+
 @app.post("/api/timetable/add-batch")
 def add_batch(body: NewBatchIn, user=Depends(require("owner")), conn=Depends(get_db)):
     spec = {k: v for k, v in body.model_dump().items() if v is not None}
@@ -209,6 +258,13 @@ def students_at_risk(level: str = Query("medium", pattern="^(medium|high)$"), us
         return risk.at_risk(conn, user, level)
     except risk.RiskError as e:
         _http(e)
+
+
+@app.get("/api/fees/reconciliation")
+def fee_reconciliation(user=Depends(require("owner", "accounts")), conn=Depends(get_db)):
+    """Bank statement vs recorded payments: matched, short-paid, duplicate, unmatched, not in bank."""
+    audit.log(conn, user, "reconciliation_viewed", outcome="ok")
+    return reconcile.reconcile(conn)
 
 
 @app.get("/api/dashboard")
@@ -228,5 +284,8 @@ def list_kind(kind: str, user=Depends(current_user)):
 
 @app.post("/api/admin/reset-demo")
 def reset_demo(user=Depends(require("owner"))):
-    """Rebuild the demo database (handy between rehearsals). Logs everyone out."""
-    return {"ok": True, "summary": seed.seed()}
+    """Rebuild the demo database from seed_data/*.csv (or sample data). Logs everyone out."""
+    try:
+        return {"ok": True, "summary": import_csv.build_demo_database()}
+    except import_csv.ImportError_ as e:
+        raise HTTPException(400, str(e))

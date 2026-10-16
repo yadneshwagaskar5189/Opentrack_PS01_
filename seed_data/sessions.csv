@@ -1,0 +1,62 @@
+session_id,batch_id,session_date,start_time,end_time,topic,trainer_id,room_id,mode,meeting_link
+SES0001,B01,2026-09-18,09:00,11:00,Core Java,T01,R1,HYBRID,https://meet.example.com/b01
+SES0002,B01,2026-09-21,09:00,11:00,OOP,T01,R1,HYBRID,https://meet.example.com/b01
+SES0003,B01,2026-09-23,09:00,11:00,Collections,T01,R1,HYBRID,https://meet.example.com/b01
+SES0004,B01,2026-09-25,09:00,11:00,JDBC,T01,R1,HYBRID,https://meet.example.com/b01
+SES0005,B01,2026-09-28,09:00,11:00,Servlets,T01,R1,HYBRID,https://meet.example.com/b01
+SES0006,B01,2026-09-30,09:00,11:00,Spring Boot,T01,R1,HYBRID,https://meet.example.com/b01
+SES0007,B01,2026-10-02,09:00,11:00,REST APIs,T01,R1,HYBRID,https://meet.example.com/b01
+SES0008,B01,2026-10-05,09:00,11:00,Hibernate,T01,R1,HYBRID,https://meet.example.com/b01
+SES0009,B01,2026-10-07,09:00,11:00,Testing,T01,R1,HYBRID,https://meet.example.com/b01
+SES0010,B01,2026-10-09,09:00,11:00,Mini Project,T01,R1,HYBRID,https://meet.example.com/b01
+SES0011,B01,2026-10-12,09:00,11:00,React Basics,T01,R1,HYBRID,https://meet.example.com/b01
+SES0012,B01,2026-10-14,09:00,11:00,Deployment,T01,R1,HYBRID,https://meet.example.com/b01
+SES0013,B02,2026-09-18,18:00,20:00,Python Basics,T01,R2,HYBRID,https://meet.example.com/b02
+SES0014,B02,2026-09-21,18:00,20:00,Functions,T01,R2,HYBRID,https://meet.example.com/b02
+SES0015,B02,2026-09-23,18:00,20:00,NumPy,T01,R2,HYBRID,https://meet.example.com/b02
+SES0016,B02,2026-09-25,18:00,20:00,Pandas,T01,R2,HYBRID,https://meet.example.com/b02
+SES0017,B02,2026-09-28,18:00,20:00,Visualization,T01,R2,HYBRID,https://meet.example.com/b02
+SES0018,B02,2026-09-30,18:00,20:00,EDA,T01,R2,HYBRID,https://meet.example.com/b02
+SES0019,B02,2026-10-02,18:00,20:00,Stats,T01,R2,HYBRID,https://meet.example.com/b02
+SES0020,B02,2026-10-05,18:00,20:00,Regression,T01,R2,HYBRID,https://meet.example.com/b02
+SES0021,B02,2026-10-07,18:00,20:00,Classification,T01,R2,HYBRID,https://meet.example.com/b02
+SES0022,B02,2026-10-09,18:00,20:00,Clustering,T01,R2,HYBRID,https://meet.example.com/b02
+SES0023,B02,2026-10-12,18:00,20:00,SQL,T01,R2,HYBRID,https://meet.example.com/b02
+SES0024,B02,2026-10-14,18:00,20:00,Dashboards,T01,R2,HYBRID,https://meet.example.com/b02
+SES0025,B03,2026-09-19,10:00,13:00,Module,T02,R1,HYBRID,https://meet.example.com/b03
+SES0026,B03,2026-09-20,10:00,13:00,Module,T02,R1,HYBRID,https://meet.example.com/b03
+SES0027,B03,2026-09-26,10:00,13:00,Module,T02,R1,HYBRID,https://meet.example.com/b03
+SES0028,B03,2026-09-27,10:00,13:00,Module,T02,R1,HYBRID,https://meet.example.com/b03
+SES0029,B03,2026-10-03,10:00,13:00,Module,T02,R1,HYBRID,https://meet.example.com/b03
+SES0030,B03,2026-10-04,10:00,13:00,Module,T02,R1,HYBRID,https://meet.example.com/b03
+SES0031,B03,2026-10-10,10:00,13:00,Module,T02,R1,HYBRID,https://meet.example.com/b03
+SES0032,B03,2026-10-11,10:00,13:00,Module,T02,R1,HYBRID,https://meet.example.com/b03
+SES0033,B04,2026-09-19,11:00,14:00,Module,T02,R3,HYBRID,https://meet.example.com/b04
+SES0034,B04,2026-09-26,11:00,14:00,Module,T02,R3,HYBRID,https://meet.example.com/b04
+SES0035,B04,2026-10-03,11:00,14:00,Module,T02,R3,HYBRID,https://meet.example.com/b04
+SES0036,B04,2026-10-10,11:00,14:00,Module,T02,R3,HYBRID,https://meet.example.com/b04
+SES0037,B05,2026-09-22,17:00,19:00,Module,T03,R3,HYBRID,https://meet.example.com/b05
+SES0038,B05,2026-09-24,17:00,19:00,Module,T03,R3,HYBRID,https://meet.example.com/b05
+SES0039,B05,2026-09-29,17:00,19:00,Module,T03,R3,HYBRID,https://meet.example.com/b05
+SES0040,B05,2026-10-01,17:00,19:00,Module,T03,R3,HYBRID,https://meet.example.com/b05
+SES0041,B05,2026-10-06,17:00,19:00,Module,T03,R3,HYBRID,https://meet.example.com/b05
+SES0042,B05,2026-10-08,17:00,19:00,Module,T03,R3,HYBRID,https://meet.example.com/b05
+SES0043,B05,2026-10-13,17:00,19:00,Module,T03,R3,HYBRID,https://meet.example.com/b05
+SES0044,B05,2026-10-15,17:00,19:00,Module,T03,R3,HYBRID,https://meet.example.com/b05
+SES0045,B06,2026-09-22,19:00,20:30,Module,T04,R2,HYBRID,https://meet.example.com/b06
+SES0046,B06,2026-09-24,19:00,20:30,Module,T04,R2,HYBRID,https://meet.example.com/b06
+SES0047,B06,2026-09-29,19:00,20:30,Module,T04,R2,HYBRID,https://meet.example.com/b06
+SES0048,B06,2026-10-01,19:00,20:30,Module,T04,R2,HYBRID,https://meet.example.com/b06
+SES0049,B06,2026-10-06,19:00,20:30,Module,T04,R2,HYBRID,https://meet.example.com/b06
+SES0050,B06,2026-10-08,19:00,20:30,Module,T04,R2,HYBRID,https://meet.example.com/b06
+SES0051,B06,2026-10-13,19:00,20:30,Module,T04,R2,HYBRID,https://meet.example.com/b06
+SES0052,B06,2026-10-15,19:00,20:30,Module,T04,R2,HYBRID,https://meet.example.com/b06
+SES0053,B08,2026-09-01,10:00,12:00,Python Basics,T06,R4,HYBRID,https://meet.example.com/b08
+SES0054,B08,2026-09-03,10:00,12:00,Functions,T06,R4,HYBRID,https://meet.example.com/b08
+SES0055,B08,2026-09-08,10:00,12:00,NumPy,T06,R4,HYBRID,https://meet.example.com/b08
+SES0056,B08,2026-09-10,10:00,12:00,Pandas,T06,R4,HYBRID,https://meet.example.com/b08
+SES0057,B08,2026-09-15,10:00,12:00,Visualization,T06,R4,HYBRID,https://meet.example.com/b08
+SES0058,B08,2026-09-17,10:00,12:00,EDA,T06,R4,HYBRID,https://meet.example.com/b08
+SES0059,B08,2026-09-22,10:00,12:00,Stats,T06,R4,HYBRID,https://meet.example.com/b08
+SES0060,B08,2026-09-24,10:00,12:00,Regression,T06,R4,HYBRID,https://meet.example.com/b08
+SES0061,B08,2026-09-29,10:00,12:00,Classification,T06,R4,HYBRID,https://meet.example.com/b08

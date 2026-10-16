@@ -13,19 +13,25 @@ CREATE VIEW v_courses_with_fee AS
 SELECT id, code, name, duration_weeks, total_fee FROM courses;
 
 CREATE VIEW v_rooms AS
-SELECT id, name, capacity FROM rooms;
+SELECT id, name, capacity, has_projector FROM rooms;
 
 CREATE VIEW v_trainers_public AS
 SELECT id, name, skills FROM trainers;
 
 CREATE VIEW v_batches AS
-SELECT b.id, b.code, c.code AS course_code, c.name AS course_name,
+SELECT b.id, b.code, b.name AS batch_name, c.code AS course_code, c.name AS course_name,
        b.trainer_id, t.name AS trainer_name, b.mode, b.time_window,
+       b.days, b.start_time, b.end_time, r.name AS usual_room,
        b.sessions_per_week, b.session_hours, b.online_seat_limit,
+       (SELECT COUNT(*) FROM enrollments e WHERE e.batch_id = b.id AND e.status = 'active'
+            AND e.learning_mode = 'online') AS online_students,
+       (SELECT COUNT(*) FROM enrollments e WHERE e.batch_id = b.id AND e.status = 'active'
+            AND e.learning_mode = 'classroom') AS classroom_students,
        b.start_date, b.end_date, b.status
 FROM batches b
 JOIN courses c  ON c.id = b.course_id
-JOIN trainers t ON t.id = b.trainer_id;
+JOIN trainers t ON t.id = b.trainer_id
+LEFT JOIN rooms r ON r.id = b.room_id;
 
 CREATE VIEW v_timetable AS
 SELECT s.id, s.week_start, s.day_of_week,
@@ -40,7 +46,7 @@ LEFT JOIN rooms r ON r.id = s.room_id;
 
 -- ---------- Student data (owner, counselor, accounts) ----------
 CREATE VIEW v_students AS
-SELECT id, name, phone, email, city, guardian_phone, joined_on FROM students;
+SELECT id, name, phone, email, city, parent_name, guardian_phone, joined_on FROM students;
 
 CREATE VIEW v_enrollments AS
 SELECT e.id, e.student_id, s.name AS student_name, e.batch_id, b.code AS batch_code,
@@ -69,7 +75,7 @@ FROM assignments a JOIN batches b ON b.id = a.batch_id;
 
 CREATE VIEW v_submissions AS
 SELECT sb.id, sb.assignment_id, a.title AS assignment_title, a.batch_id, b.code AS batch_code,
-       sb.student_id, s.name AS student_name, sb.submitted_on, sb.score
+       sb.student_id, s.name AS student_name, sb.submitted_on, sb.score, sb.status
 FROM submissions sb
 JOIN assignments a ON a.id = sb.assignment_id
 JOIN batches b     ON b.id = a.batch_id
@@ -106,11 +112,48 @@ SELECT p.id, p.student_id, s.name AS student_name, p.instalment_id, p.amount,
        p.paid_on, p.method, p.reference
 FROM payments p JOIN students s ON s.id = p.student_id;
 
+-- Bank statement lines (owner, accounts). utr matches v_payments.reference.
+CREATE VIEW v_bank_statement AS
+SELECT id, txn_ref, txn_date, description, credit, utr, balance FROM bank_transactions;
+
+-- One row per enrollment: attendance and fees, with the certificate rule applied
+-- (attendance >= 75% AND fees fully paid).
+CREATE VIEW v_certificate_eligibility AS
+SELECT x.*,
+       CASE WHEN x.attendance_pct >= 75 AND x.fee_balance = 0 THEN 1 ELSE 0 END AS eligible,
+       CASE WHEN x.attendance_pct >= 75 AND x.fee_balance = 0 THEN 'Eligible'
+            WHEN x.attendance_pct < 75 AND x.fee_balance > 0 THEN 'Attendance below 75% and fees pending'
+            WHEN x.attendance_pct < 75 THEN 'Attendance below 75%'
+            WHEN x.attendance_pct IS NULL THEN 'No classes recorded yet'
+            ELSE 'Fees pending' END AS reason,
+       (SELECT certificate_no FROM certificates c WHERE c.enrollment_id = x.enrollment_id) AS certificate_no
+FROM (
+  SELECT e.id AS enrollment_id, e.student_id, s.name AS student_name, e.batch_id, b.code AS batch_code,
+         b.status AS batch_status, e.status AS enrollment_status,
+         (SELECT COUNT(*) FROM attendance a JOIN class_sessions cs ON cs.id = a.session_id
+            WHERE a.student_id = e.student_id AND cs.batch_id = e.batch_id) AS classes_held,
+         (SELECT COUNT(*) FROM attendance a JOIN class_sessions cs ON cs.id = a.session_id
+            WHERE a.student_id = e.student_id AND cs.batch_id = e.batch_id AND a.status != 'absent') AS classes_attended,
+         (SELECT ROUND(100.0 * SUM(a.status != 'absent') / COUNT(*), 1) FROM attendance a
+            JOIN class_sessions cs ON cs.id = a.session_id
+            WHERE a.student_id = e.student_id AND cs.batch_id = e.batch_id) AS attendance_pct,
+         (SELECT COALESCE(SUM(i.amount - i.paid_amount), 0) FROM instalments i
+            JOIN fee_plans fp ON fp.id = i.fee_plan_id WHERE fp.enrollment_id = e.id) AS fee_balance
+  FROM enrollments e
+  JOIN students s ON s.id = e.student_id
+  JOIN batches b  ON b.id = e.batch_id
+) x;
+
 -- ---------- Trainer: only their own batches, never fees or phone numbers ----------
 -- current_trainer_id() is registered per connection from the logged-in user.
 CREATE VIEW t_my_batches AS
-SELECT b.id, b.code, c.name AS course_name, b.mode, b.time_window,
-       b.sessions_per_week, b.start_date, b.end_date, b.status
+SELECT b.id, b.code, b.name AS batch_name, c.name AS course_name, b.mode, b.time_window,
+       b.days, b.start_time, b.end_time, b.sessions_per_week, b.online_seat_limit,
+       (SELECT COUNT(*) FROM enrollments e WHERE e.batch_id = b.id AND e.status = 'active'
+            AND e.learning_mode = 'online') AS online_students,
+       (SELECT COUNT(*) FROM enrollments e WHERE e.batch_id = b.id AND e.status = 'active'
+            AND e.learning_mode = 'classroom') AS classroom_students,
+       b.start_date, b.end_date, b.status
 FROM batches b JOIN courses c ON c.id = b.course_id
 WHERE b.trainer_id = current_trainer_id();
 
@@ -144,7 +187,7 @@ WHERE b.trainer_id = current_trainer_id();
 
 CREATE VIEW t_my_submissions AS
 SELECT sb.id, sb.assignment_id, a.title AS assignment_title, b.code AS batch_code,
-       sb.student_id, s.name AS student_name, sb.submitted_on, sb.score
+       sb.student_id, s.name AS student_name, sb.submitted_on, sb.score, sb.status
 FROM submissions sb
 JOIN assignments a ON a.id = sb.assignment_id
 JOIN batches b     ON b.id = a.batch_id

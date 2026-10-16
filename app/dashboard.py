@@ -14,7 +14,8 @@ def _one(conn, sql, args=()):
 def summary(conn, user: dict) -> dict:
     role = user["role"]
     today = config.today()
-    ws, we = config.week_bounds(today)
+    ws, we = config.due_window()            # "this week" for fees: today + 6 days
+    pws, _ = config.plan_week()             # the timetable's week
     month_start = today.replace(day=1).isoformat()
     out: dict = {"role": role, "today": today.isoformat(), "week_start": ws.isoformat(), "week_end": we.isoformat()}
 
@@ -38,7 +39,7 @@ def summary(conn, user: dict) -> dict:
         sql = ("SELECT s.start_hour, s.end_hour, b.code AS batch_code, t.name AS trainer_name, r.name AS room_name, "
                "s.is_online FROM timetable_slots s JOIN batches b ON b.id=s.batch_id JOIN trainers t ON t.id=s.trainer_id "
                "LEFT JOIN rooms r ON r.id=s.room_id WHERE s.week_start=? AND s.day_of_week=?")
-        args = [ws.isoformat(), today.weekday()]
+        args = [pws.isoformat(), today.weekday()]
         if trainer_id:
             sql += " AND s.trainer_id=?"
             args.append(trainer_id)
@@ -95,6 +96,10 @@ LIST_SQL = {
     },
     "rooms": {
         "default": "SELECT * FROM v_rooms ORDER BY capacity DESC",
+    },
+    "courses": {
+        "trainer": "SELECT id, code, name, duration_weeks FROM v_courses_public ORDER BY code",
+        "default": "SELECT id, code, name, duration_weeks FROM v_courses_with_fee ORDER BY code",
     },
 }
 
