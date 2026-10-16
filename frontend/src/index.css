@@ -1096,3 +1096,11 @@ pre, code, kbd, .refusal-sql, .sql-code, .sql-content, .sql-line-numbers { font-
 .brief-ask { align-self: flex-start; display: inline-flex; align-items: center; gap: 4px; margin-top: 2px; font-size: 12.5px; }
 .result-link.wa-send-button { color: #fff; border-color: #1fa855; background: #1fa855; }
 .result-link.wa-send-button svg { color: #fff; }
+
+/* Top "Ask anything" box: a real input that sends the question to the copilot */
+.top-ask { cursor: text; gap: 8px; min-width: 210px; padding-right: 6px; }
+.top-ask input { flex: 1; min-width: 0; padding: 0; color: #4a3829; border: 0; outline: 0; background: transparent; font: inherit; font-size: 13.5px; }
+.top-ask input::placeholder { color: #937e6d; }
+.top-ask:focus-within { border-color: #ee815e; box-shadow: 0 0 0 3px rgba(242,143,82,.16); }
+.top-ask kbd { white-space: nowrap; }
+@media (max-width: 990px) { .top-ask { min-width: 150px; width: auto; justify-content: flex-start; } .top-ask input { display: block; } .top-ask kbd { display: none; } }

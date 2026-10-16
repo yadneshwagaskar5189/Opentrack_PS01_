@@ -107,7 +107,7 @@ export default function App() {
 
   return <div>
     <AppShell me={me} health={health} currentView={view} approvalsCount={pendingCount} onRoleChange={switchRole}
-              onNavigate={navigate} onSignOut={signOut}>
+              onNavigate={navigate} onSignOut={signOut} onAsk={askCopilot}>
       {/* keyed by user: switching role reloads the page's data for the new role */}
       <Fragment key={me.user.id}>
       {view === 'dashboard' && <DashboardView {...common} institute={health?.institute} />}

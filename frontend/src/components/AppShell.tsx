@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Activity, BookOpenCheck, CalendarDays, ChevronDown, ClipboardCheck, Command, GraduationCap, History, Landmark, LayoutDashboard, LogOut, PenLine, Search, ShieldCheck, Sparkles, TriangleAlert, Users, UsersRound, Bell } from 'lucide-react';
 import type { Health, Me, Role, ViewId } from '../types';
 import { DEMO_ACCOUNTS, ROLE_ORDER } from '../services/api';
@@ -36,16 +36,26 @@ interface AppShellProps {
   onRoleChange: (role: Role) => void;
   onNavigate: (view: ViewId) => void;
   onSignOut: () => void;
+  onAsk: (question: string) => void;
   children: ReactNode;
 }
 
-export function AppShell({ me, health, currentView, approvalsCount, onRoleChange, onNavigate, onSignOut, children }: AppShellProps) {
+export function AppShell({ me, health, currentView, approvalsCount, onRoleChange, onNavigate, onSignOut, onAsk, children }: AppShellProps) {
   const role = me.user.role;
   const account = DEMO_ACCOUNTS[role];
   const initials = me.user.display_name.split(' ').map((p) => p[0]).join('').slice(0, 2);
   const live = health && health.llm !== 'mock';
   const items = navItems.filter((item) => accessible[role].includes(item.id));
   const [step, setStepState] = useState(getStep);
+  const [topQuery, setTopQuery] = useState('');
+  const topRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {                                 // Ctrl+K (or Cmd+K) jumps to the ask box from anywhere
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); topRef.current?.focus(); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
   const resize = (next: number) => { setStep(next); setStepState(next); };
   return (
     <div className="app-frame">
@@ -93,9 +103,16 @@ export function AppShell({ me, health, currentView, approvalsCount, onRoleChange
               <span>{Math.round(zoomFor(step) * 100)}%</span>
               <button onClick={() => resize(step + 1)} disabled={!canGrow(step)} aria-label="Larger text" title="Larger text">A+</button>
             </div>
-            <button className="icon-button search-trigger" aria-label="Ask the copilot" onClick={() => onNavigate('copilot')}>
-              <Search size={16} /><span>Ask anything</span><kbd>AI</kbd>
-            </button>
+            <form className="icon-button search-trigger top-ask" role="search" onSubmit={(e) => {
+              e.preventDefault();
+              const q = topQuery.trim();
+              if (!q) { onNavigate('copilot'); return; }
+              onAsk(q); setTopQuery(''); (document.activeElement as HTMLElement | null)?.blur();
+            }}>
+              <Search size={16} />
+              <input ref={topRef} value={topQuery} onChange={(e) => setTopQuery(e.target.value)} placeholder="Ask anything…" aria-label="Ask the copilot anything" />
+              <kbd title="Press Ctrl+K to jump here">{topQuery ? '↵' : 'Ctrl K'}</kbd>
+            </form>
             {role !== 'trainer' && (
               <button className="icon-button bell-button" aria-label="Approvals waiting" onClick={() => onNavigate('approvals')}>
                 <Bell size={16} />{approvalsCount > 0 && <i />}

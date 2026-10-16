@@ -1,0 +1,24 @@
+# Render Blueprint: render.com -> New -> Blueprint -> pick this repo.
+# Free plan: sleeps after 15 min without visits (first visit then takes ~1 min) and the database
+# is rebuilt from seed_data on every restart, so data typed in during a session is not kept.
+services:
+  - type: web
+    name: institute-copilot
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/health
+    envVars:
+      - key: LLM_API_KEY            # your Groq key: paste it when Render asks
+        sync: false
+      - key: LLM_BASE_URL
+        value: https://api.groq.com/openai/v1
+      - key: LLM_MODEL
+        value: openai/gpt-oss-120b
+      - key: DEMO_TODAY
+        value: "2026-10-16"
+      - key: WHATSAPP_PROVIDER
+        value: link
+      - key: WHATSAPP_REDIRECT_TO   # your phone, e.g. +919XXXXXXXXX (sample students' messages go here)
+        sync: false
+      - key: AUDIT_KEY              # secret that seals the audit log
+        generateValue: true

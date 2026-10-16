@@ -1,6 +1,7 @@
 """FastAPI app. Run:  uvicorn app.main:app --reload --port 8000
 Interactive API docs: http://localhost:8000/docs
 """
+import os
 import sqlite3
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -461,3 +462,13 @@ def reset_demo(user=Depends(require("owner"))):
         return {"ok": True, "summary": import_csv.build_demo_database()}
     except import_csv.ImportError_ as e:
         raise HTTPException(400, str(e))
+
+
+# ---------------------------------------------------------------- the website (deployed)
+# The Docker image builds the frontend into frontend/dist and the backend serves it too: one link, no CORS.
+# Locally (npm run dev) there is no dist folder, so nothing changes. Keep this LAST: a mount at "/"
+# catches every path, so routes added after it would never be reached.
+_DIST = Path(os.getenv("FRONTEND_DIST", str(config.ROOT / "frontend" / "dist")))
+if (_DIST / "index.html").exists():
+    from fastapi.staticfiles import StaticFiles
+    app.mount("/", StaticFiles(directory=str(_DIST), html=True), name="website")

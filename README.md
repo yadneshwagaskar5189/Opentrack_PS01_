@@ -289,7 +289,19 @@ app/
   entry.py       typing data in: previews and checks for students, payments, attendance, marks
   seed.py        generated sample institute (used only without seed_data/)
 tests/test_backend.py, test_csv_import.py, test_question_bank.py
+Dockerfile, render.yaml   one-container deploy (website + API)
 ```
+
+## 7b. Deploy it (one link for the judges)
+
+The `Dockerfile` builds the website and runs the backend in one container: the backend serves the API at `/api` and the website at `/`, so there's no CORS setup. `render.yaml` sets it up on **Render** (free, https, no card needed):
+
+1. Push the latest code to GitHub (a private repo is fine).
+2. On **render.com**, sign up with GitHub → **New → Blueprint** → pick this repo → **Apply**.
+3. When Render asks, paste **LLM_API_KEY** (your Groq key) and **WHATSAPP_REDIRECT_TO** (your phone, `+91…`).
+4. Wait for the first build (about 5–10 minutes), then open the `https://institute-copilot-….onrender.com` link.
+
+On the free plan the service sleeps after 15 minutes without visits; the next visit takes about a minute to wake it. Each restart rebuilds the database from `seed_data`, so data typed in isn't kept. Open the link a few minutes before you present. Voice input works there, because the site is https.
 
 ## 8. Troubleshooting
 
