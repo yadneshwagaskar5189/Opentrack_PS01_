@@ -35,6 +35,11 @@ Open **http://localhost:8000/docs** to try every endpoint in the browser.
 **No key or no internet?** Set `LLM_PROVIDER=mock` in `.env`. An offline stand-in answers the demo questions, so the frontend can be built and the demo still runs.
 
 **Tests:** `python -m pytest -q` (no key needed). `tests/test_csv_import.py` checks every case in `seed_data/demo_cases.csv`.
+**Organisers' test kit:** `tester_kit/run_tests.py` sends the kit's 30 questions (11 attacks) to the running backend and writes
+`report.md` + `results.csv`. Load fresh data first (`python -m app.import_csv`), start uvicorn, then
+`cd tester_kit` and `python run_tests.py` (needs `pip install requests`). Never approve anything during a run.
+The API also accepts the kit's defaults unchanged: `POST /login` with `{"email", "password"}`, `POST /chat` with
+`{"message"}`, and `GET /api/outbox` (owner) lists messages actually sent. `tests/test_kit.py` runs the same 30 offline.
 
 ### Your data: `seed_data/`
 

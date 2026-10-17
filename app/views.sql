@@ -19,7 +19,9 @@ CREATE VIEW v_trainers_public AS
 SELECT id, name, skills FROM trainers;
 
 CREATE VIEW v_batches AS
-SELECT b.id, b.code, b.name AS batch_name, c.code AS course_code, c.name AS course_name,
+SELECT b.id, b.code, b.name AS batch_name,
+       CASE WHEN instr(b.name, ' - ') > 0 THEN substr(b.name, 1, instr(b.name, ' ') - 1) || ' ' || trim(replace(substr(b.name, instr(b.name, ' - ') + 3), '(NEW)', '')) ELSE b.name END AS short_name,     -- what staff call it: 'Java Morning', 'Python Evening'
+       c.code AS course_code, c.name AS course_name,
        b.trainer_id, t.name AS trainer_name, b.mode, b.time_window,
        b.days, b.start_time, b.end_time, r.name AS usual_room,
        b.sessions_per_week, b.session_hours, b.online_seat_limit,
@@ -192,10 +194,33 @@ FROM (
   JOIN batches b  ON b.id = e.batch_id
 ) x;
 
+-- Certificate status for accounts staff: who qualifies and whether fees are cleared, without
+-- attendance numbers or reasons (accounts never see attendance). Same rule as above.
+CREATE VIEW v_certificate_status AS
+SELECT y.enrollment_id, y.student_id, y.student_name, y.batch_code, y.course_name, y.batch_status,
+       CASE WHEN y.fee_balance = 0 THEN 'paid' ELSE 'pending' END AS fees,
+       CASE WHEN y.attendance_pct >= 75 AND y.fee_balance = 0 THEN 1 ELSE 0 END AS eligible,
+       (SELECT certificate_no FROM certificates c WHERE c.enrollment_id = y.enrollment_id) AS certificate_no
+FROM (
+  SELECT e.id AS enrollment_id, e.student_id, s.name AS student_name, b.code AS batch_code, co.name AS course_name,
+         b.status AS batch_status,
+         (SELECT ROUND(100.0 * SUM(a.status != 'absent') / COUNT(*), 1) FROM attendance a
+            JOIN class_sessions cs ON cs.id = a.session_id
+            WHERE a.student_id = e.student_id AND cs.batch_id = e.batch_id) AS attendance_pct,
+         (SELECT COALESCE(SUM(i.amount - i.paid_amount), 0) FROM instalments i
+            JOIN fee_plans fp ON fp.id = i.fee_plan_id WHERE fp.enrollment_id = e.id) AS fee_balance
+  FROM enrollments e
+  JOIN students s  ON s.id = e.student_id
+  JOIN batches b   ON b.id = e.batch_id
+  JOIN courses co  ON co.id = b.course_id
+) y;
+
 -- ---------- Trainer: only their own batches, never fees or phone numbers ----------
 -- current_trainer_id() is registered per connection from the logged-in user.
 CREATE VIEW t_my_batches AS
-SELECT b.id, b.code, b.name AS batch_name, c.name AS course_name, b.mode, b.time_window,
+SELECT b.id, b.code, b.name AS batch_name,
+       CASE WHEN instr(b.name, ' - ') > 0 THEN substr(b.name, 1, instr(b.name, ' ') - 1) || ' ' || trim(replace(substr(b.name, instr(b.name, ' - ') + 3), '(NEW)', '')) ELSE b.name END AS short_name,
+       c.name AS course_name, b.mode, b.time_window,
        b.days, b.start_time, b.end_time, b.sessions_per_week, b.online_seat_limit,
        (SELECT COUNT(*) FROM enrollments e WHERE e.batch_id = b.id AND e.status = 'active'
             AND e.learning_mode = 'online') AS online_students,

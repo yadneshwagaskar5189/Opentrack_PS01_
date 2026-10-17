@@ -8,7 +8,7 @@ a fee question as a trainer still shows the guard blocking it.
 """
 import re
 
-from . import config, question_bank
+from . import config, db, question_bank
 
 
 def _week():
@@ -23,11 +23,34 @@ def plan(question: str, user: dict, context: dict) -> dict:
     today = config.today().isoformat()
     java = "java" in q
     institute = context.get("institute") or "the institute"
-    codes = [b["code"] for b in context.get("batches", []) if re.search(rf"\b{re.escape(b['code'].lower())}\b", q)]
+    codes = [b["code"] for b in context.get("batches", []) if re.search(rf"\b{re.escape(b['code'].lower())}\b", q)
+             or (b.get("name") and " - " in b["name"] and _short(b["name"]).lower() in q)]
     if codes:
         course_filter = "AND e.batch_code IN (" + ", ".join(f"'{c}'" for c in codes) + ")"
     else:
         course_filter = "AND e.course_name LIKE '%Java%'" if java else ""
+
+    student = _student_named(question)
+
+    # money from the bank recorded against a student's EMI: "Mark the Rs 11,000 from Suresh Gupta as Rohan Gupta's August EMI"
+    if student and re.search(r"\b(mark|record|post|apply|book|treat)\b", q) and re.search(r"\b(as|against|for|towards)\b", q) \
+            and re.search(r"emi|instal|fee", q) and (amt := re.search(r"(?:₹|rs\.?|inr)\s*([\d,]+)|\b(\d{1,3}(?:,\d{3})+|\d{4,6})\b", q)):
+        plan = {"type": "action", "action_type": "record_payment", "student_name": student,
+                "amount": int(next(g for g in amt.groups() if g).replace(",", "")),
+                "method": "cash" if "cash" in q else "UPI",
+                "explanation": f"Record the payment against {student}'s EMI."}
+        if (n := re.search(r"\bemi\s*(\d)\b|\b(\d)(?:st|nd|rd|th)\s+emi\b", q)):
+            plan["instalment_no"] = int(next(g for g in n.groups() if g))
+        return plan
+
+    # "Draft a WhatsApp message to Vivek Joshi's parent about his recent absences"
+    if student and re.search(r"parent|guardian|father|mother", q) and re.search(r"message|whatsapp|draft|tell|inform|send", q):
+        entry = next(e for e in question_bank.EXTRA if e["id"] == "x_parent_msg")
+        p = question_bank.plan_for(entry, user["role"], institute)
+        if p:
+            p["sql"] = p["sql"].replace("Vivek Joshi", student.replace("'", "''"))
+            p["explanation"] = f"A message to {student}'s parent about recent absences."
+            return p
 
     if re.search(r"\b(miss|missed|absent|absence)", q) and re.search(r"emi|instal|fee|due", q):
         n = int(m.group(1)) if (m := re.search(r"(\d+)\s*(or more|\+)?\s*class", q)) else 3
@@ -52,8 +75,9 @@ ORDER BY classes_missed DESC"""
         return {"type": "query", "sql": sql,
                 "explanation": f"Students who missed {n}+ classes and have an unpaid EMI due this week."}
 
-    if re.search(r"remind|reminder|whatsapp|message", q) and re.search(r"overdue|due this week|emis? due", q):
-        overdue = "overdue" in q
+    if re.search(r"remind|reminder|whatsapp|message", q) and re.search(r"overdue|due this week|emis? due|\bowes?\b|owing|"
+                                                                      r"defaulter|not paid|unpaid|pending", q):
+        overdue = not re.search(r"due this week|emis? due", q)
         where = (f"status IN ('overdue', 'partial') AND due_date < '{today}'" if overdue
                  else f"status != 'paid' AND due_date BETWEEN '{ws}' AND '{we}'")
         return {"type": "action", "action_type": "send_whatsapp",
@@ -83,6 +107,20 @@ ORDER BY classes_missed DESC"""
                        "ORDER BY batch_code, student_name",
                 "explanation": "Students who meet the certificate rule and don't have a certificate yet."}
 
+    if re.search(r"seat", q) or (re.search(r"online", q) and re.search(r"one more|another|room|space|full|9th|add", q)):
+        view = "t_my_batches" if trainer else "v_batches"
+        where = f"WHERE code IN ({', '.join(repr(c) for c in codes)})" if codes else "WHERE status = 'active'"
+        return {"type": "query", "explanation": "Online seats used and left per batch.",
+                "sql": f"SELECT code, short_name, online_seat_limit, online_students, online_seat_limit - online_students "
+                       f"AS online_seats_left, CASE WHEN online_students >= online_seat_limit THEN 'No: the online seat "
+                       f"limit is reached, the batch is full' ELSE 'Yes: ' || (online_seat_limit - online_students) || "
+                       f"' online seat(s) left' END AS can_add_online FROM {view} {where} ORDER BY online_seats_left"}
+
+    # the checked questions (app/question_bank.py): fee structure, today's lectures, which trainer, totals...
+    entry = question_bank.match(question, user["role"])
+    if entry:
+        return question_bank.plan_for(entry, user["role"], institute)
+
     if re.search(r"certificate", q):
         where = f"WHERE batch_code IN ({', '.join(repr(c) for c in codes)})" if codes else "WHERE batch_status = 'completed'"
         return {"type": "query", "explanation": "Certificate check: attendance of at least 75% and fees fully paid.",
@@ -105,13 +143,6 @@ ORDER BY classes_missed DESC"""
                 "sql": "SELECT b.txn_date, b.description, b.credit, b.utr FROM v_bank_statement b "
                        "LEFT JOIN v_payments p ON p.reference = b.utr WHERE p.id IS NULL ORDER BY b.txn_date"}
 
-    if re.search(r"seat", q) or (re.search(r"online", q) and re.search(r"one more|another|room|space|full|9th|add", q)):
-        view = "t_my_batches" if trainer else "v_batches"
-        where = f"WHERE code IN ({', '.join(repr(c) for c in codes)})" if codes else "WHERE status = 'active'"
-        return {"type": "query", "explanation": "Online seats used and left per batch.",
-                "sql": f"SELECT code, online_seat_limit, online_students, online_seat_limit - online_students AS online_seats_left "
-                       f"FROM {view} {where} ORDER BY online_seats_left"}
-
     if re.search(r"double|clash|conflict|overlap", q):
         if trainer:
             return {"type": "query", "explanation": "Overlapping classes in your timetable.",
@@ -124,7 +155,7 @@ ORDER BY classes_missed DESC"""
                        "AND a.day_of_week=b.day_of_week AND a.id<b.id AND a.start_hour<b.end_hour "
                        "AND b.start_hour<a.end_hour ORDER BY a.day_of_week"}
 
-    if re.search(r"(unavailable|sick|leave|absent today|not available).*(re-?plan|timetable|schedule)|re-?plan", q):
+    if re.search(r"(unavailable|sick|leave|absent today|not available).*(re-?plan|timetable|schedule|classes|lectures)|re-?plan", q):
         names = context.get("trainers", [])
         if not names:
             return {"type": "refuse", "reason": "Only the owner can re-plan the timetable."}
@@ -136,18 +167,19 @@ ORDER BY classes_missed DESC"""
                     "explanation": f"Re-plan {hit['name']}'s classes."}
 
     if "mark" in q and "paid" in q:
-        m = re.search(r"mark\s+(.+?)(?:'s|’s)?\s+(?:emi|instal|fee)", q)
-        name = m.group(1).strip() if m else ""
-        safe = name.replace("'", "''")
-        return {"type": "action", "action_type": "mark_instalment_paid", "title": f"Mark {name.title()}'s EMI paid",
-                "sql": f"SELECT id AS instalment_id, student_name, due_date, balance FROM v_instalments "
-                       f"WHERE lower(student_name) LIKE '%{safe}%' AND status != 'paid' ORDER BY due_date LIMIT 1",
-                "explanation": "The next unpaid instalment for that student."}
-
-    # the 30 checked everyday questions (app/question_bank.py): fee structure, today's lectures, which trainer...
-    entry = question_bank.match(question, user["role"])
-    if entry:
-        return question_bank.plan_for(entry, user["role"], institute)
+        if student:
+            name = student
+        else:
+            m = re.search(r"mark\s+(.+?)(?:'s|’s)?\s+(?:emi|instal|fee)", q)
+            name = m.group(1).strip().title() if m else ""
+        safe = name.lower().replace("'", "''")
+        every = re.search(r"\ball\b|\bevery\b|emis\b|instalments\b", q)
+        return {"type": "action", "action_type": "mark_instalment_paid",
+                "title": f"Mark {name}'s EMI{'s' if every else ''} paid",
+                "sql": f"SELECT id AS instalment_id, student_name, instalment_no, due_date, balance FROM v_instalments "
+                       f"WHERE lower(student_name) LIKE '%{safe}%' AND status != 'paid' ORDER BY due_date"
+                       + ("" if every else " LIMIT 1"),
+                "explanation": f"{'All unpaid instalments' if every else 'The next unpaid instalment'} of {name}."}
 
     if re.search(r"overdue|pending fee|defaulter", q):
         return {"type": "query", "explanation": "Overdue EMIs, biggest first.",
@@ -200,8 +232,20 @@ ORDER BY classes_missed DESC"""
                        f"ORDER BY day_of_week, start_hour"}
 
     return {"type": "refuse",
-            "reason": "Offline demo mode only understands the sample questions (see the question list: fees, "
-                      "today's lectures, trainers, attendance, reminders...). Add an LLM API key to ask anything."}
+            "reason": "I can't answer that one in offline demo mode: it only understands the sample questions (see the "
+                      "question list: fees, today's lectures, trainers, attendance, reminders...). Add an LLM API key to "
+                      "ask anything."}
+
+
+def _student_named(question: str) -> str | None:
+    """A student named in the question (full name, longest first)."""
+    q = question.lower()
+    conn = db.get_conn()
+    try:
+        names = [r[0] for r in conn.execute("SELECT name FROM students ORDER BY length(name) DESC")]
+    finally:
+        conn.close()
+    return next((n for n in names if re.search(rf"\b{re.escape(n.lower())}\b", q)), None)
 
 
 PHONE = r"(?:\+?91[\s-]?)?[6-9]\d{4}[\s-]?\d{5}"
@@ -295,6 +339,14 @@ def _leave_plan(question: str, q: str, user: dict, context: dict) -> dict | None
     from datetime import date, timedelta
     today = config.today()
     dates = re.findall(r"\d{4}-\d{2}-\d{2}", q)
+    months = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
+    if not dates:
+        for m in re.finditer(r"((?:\d{1,2}(?:st|nd|rd|th)?\s*(?:,|and|&|to|-)?\s*)+)(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*", q):
+            for d in re.findall(r"\d{1,2}", m.group(1)):
+                try:
+                    dates.append(date(today.year, months.index(m.group(2)) + 1, int(d)).isoformat())
+                except ValueError:
+                    pass
     if not dates:
         if "day after tomorrow" in q or "parso" in q:
             dates = [(today + timedelta(days=2)).isoformat()]
@@ -317,3 +369,7 @@ def _leave_plan(question: str, q: str, user: dict, context: dict) -> dict | None
         if hit:
             plan["trainer_id"] = hit["id"]
     return plan
+
+
+def _short(name: str) -> str:
+    return name.split(" ")[0] + " " + name.split(" - ", 1)[1].replace("(NEW)", "").strip() if " - " in name else name

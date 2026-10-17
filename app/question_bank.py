@@ -131,10 +131,11 @@ BANK: list[dict] = [
          why="Upcoming classes whose trainer is on leave that day (re-plan them on the Timetable page)."),
     dict(id="double_booked", topic="Trainers & rooms", q="Is any trainer double-booked this week?",
          alt=["timetable clash", "trainer clash", "overlapping classes", "same sir two classes"],
-         sql="SELECT a.trainer_name, a.day_name, a.batch_code AS class_1, a.start_hour AS class_1_start, "
-             "a.end_hour AS class_1_end, b.batch_code AS class_2, b.start_hour AS class_2_start, b.end_hour AS class_2_end "
-             "FROM v_timetable a JOIN v_timetable b ON a.trainer_id = b.trainer_id AND a.day_of_week = b.day_of_week "
-             "AND a.id < b.id AND a.start_hour < b.end_hour AND b.start_hour < a.end_hour ORDER BY a.day_of_week",
+         sql="SELECT a.trainer_name, a.day_name, a.batch_code || ' ' || ba.short_name AS class_1, a.start_hour AS class_1_start, "
+             "a.end_hour AS class_1_end, b.batch_code || ' ' || bb.short_name AS class_2, b.start_hour AS class_2_start, "
+             "b.end_hour AS class_2_end FROM v_timetable a JOIN v_timetable b ON a.trainer_id = b.trainer_id "
+             "AND a.day_of_week = b.day_of_week AND a.id < b.id AND a.start_hour < b.end_hour AND b.start_hour < a.end_hour "
+             "JOIN v_batches ba ON ba.id = a.batch_id JOIN v_batches bb ON bb.id = b.batch_id ORDER BY a.day_of_week",
          trainer="SELECT a.day_name, a.start_hour, a.batch_code AS class_1, b.batch_code AS class_2 FROM t_my_timetable a "
                  "JOIN t_my_timetable b ON a.day_of_week = b.day_of_week AND a.id < b.id "
                  "AND a.start_hour < b.end_hour AND b.start_hour < a.end_hour",
@@ -148,16 +149,17 @@ BANK: list[dict] = [
          why="Rooms with no class between 18:00 and 19:00 today."),
     # ------------------------------------------------------------ students and batches
     dict(id="students_per_batch", topic="Students", q="How many students are in each batch?",
-         alt=["student count", "batch strength", "number of students per batch", "how many students in my batches"],
-         sql="SELECT code, batch_name, classroom_students, online_students, classroom_students + online_students AS total "
-             "FROM v_batches WHERE status != 'completed' ORDER BY code",
-         trainer="SELECT code, batch_name, classroom_students, online_students, "
-                 "classroom_students + online_students AS total FROM t_my_batches ORDER BY code",
+         alt=["student count", "batch strength", "number of students per batch", "how many students in my batches",
+              "how many students are enrolled in each batch", "batch wise enrolment"],
+         sql="SELECT code, short_name, classroom_students + online_students AS enrolled, classroom_students, "
+             "online_students FROM v_batches WHERE status != 'completed' ORDER BY code",
+         trainer="SELECT code, short_name, classroom_students + online_students AS enrolled, classroom_students, "
+                 "online_students FROM t_my_batches ORDER BY code",
          why="Active students per batch, classroom and online."),
     dict(id="online_seats", topic="Students", q="How many online seats are left in each batch?",
          alt=["online seats left", "is the online batch full", "seats available online"],
-         sql="SELECT code, online_seat_limit, online_students, online_seat_limit - online_students AS online_seats_left "
-             "FROM v_batches WHERE status != 'completed' ORDER BY online_seats_left",
+         sql="SELECT code, short_name, online_seat_limit, online_students, online_seat_limit - online_students "
+             "AS online_seats_left FROM v_batches WHERE status != 'completed' ORDER BY online_seats_left",
          trainer="SELECT code, online_seat_limit, online_students, online_seat_limit - online_students AS online_seats_left "
                  "FROM t_my_batches ORDER BY online_seats_left",
          why="Online seat limit, seats taken and seats left per batch."),
@@ -247,6 +249,147 @@ BANK: list[dict] = [
 ]
 
 assert len(BANK) == 30, len(BANK)
+
+# More checked examples, used only as worked examples in the prompt and by the offline mode (not shown in the
+# question list). They cover totals, at-risk reasons, seat checks, parent messages, reconciliation and the like.
+_RISK = ("SELECT student_name, batch_code, attendance_pct, absences_last_2_weeks, overdue_emis, missing_assignments, "
+         "trim(CASE WHEN attendance_pct < 75 THEN 'attendance ' || attendance_pct || '%; ' ELSE '' END || "
+         "CASE WHEN absences_last_2_weeks >= 3 THEN absences_last_2_weeks || ' absences in the last 2 weeks; ' ELSE '' END || "
+         "CASE WHEN overdue_emis > 0 THEN overdue_emis || ' overdue EMI(s); ' ELSE '' END || "
+         "CASE WHEN missing_assignments > 0 THEN missing_assignments || ' assignment(s) not submitted' ELSE '' END, '; ') "
+         "AS reasons FROM (SELECT e.student_name, e.batch_code, "
+         "(SELECT c.attendance_pct FROM v_certificate_eligibility c WHERE c.enrollment_id = e.id) AS attendance_pct, "
+         "(SELECT COUNT(*) FROM v_attendance a WHERE a.student_id = e.student_id AND a.batch_id = e.batch_id "
+         "AND a.status = 'absent' AND a.session_date >= date('{today}', '-14 days')) AS absences_last_2_weeks, "
+         "(SELECT COUNT(*) FROM v_instalments i WHERE i.student_id = e.student_id AND i.batch_id = e.batch_id "
+         "AND i.status IN ('overdue', 'partial') AND i.due_date < '{today}') AS overdue_emis, "
+         "(SELECT COUNT(*) FROM v_assignments s WHERE s.batch_id = e.batch_id AND s.due_date < '{today}' AND NOT EXISTS "
+         "(SELECT 1 FROM v_submissions sb WHERE sb.assignment_id = s.id AND sb.student_id = e.student_id)) AS missing_assignments "
+         "FROM v_enrollments e WHERE e.status = 'active') "
+         "WHERE attendance_pct < 75 OR absences_last_2_weeks >= 3 OR overdue_emis > 0 "
+         "ORDER BY (attendance_pct < 75) + (absences_last_2_weeks >= 3) + 2 * overdue_emis + (missing_assignments > 0) DESC, "
+         "attendance_pct")
+_RISK_T = ("SELECT student_name, batch_code, attendance_pct, absences_last_2_weeks, "
+           "trim(CASE WHEN attendance_pct < 75 THEN 'attendance ' || attendance_pct || '%; ' ELSE '' END || "
+           "CASE WHEN absences_last_2_weeks >= 3 THEN absences_last_2_weeks || ' absences in the last 2 weeks' ELSE '' END, '; ') "
+           "AS reasons FROM (SELECT student_name, batch_code, ROUND(100.0 * SUM(status != 'absent') / COUNT(*), 1) "
+           "AS attendance_pct, SUM(status = 'absent' AND session_date >= date('{today}', '-14 days')) AS absences_last_2_weeks "
+           "FROM t_my_attendance GROUP BY student_id, batch_code) WHERE attendance_pct < 75 OR absences_last_2_weeks >= 3 "
+           "ORDER BY attendance_pct")
+_RECONCILE = ("SELECT b.txn_date, b.description, b.credit, b.utr, CASE "
+              "WHEN (SELECT COUNT(*) FROM v_bank_statement d WHERE d.utr = b.utr) > 1 THEN 'duplicate credit' "
+              "WHEN p.id IS NULL AND (b.utr IS NULL OR lower(b.description) LIKE '%interest%') THEN 'not a fee (bank interest)' "
+              "WHEN p.id IS NULL THEN 'unmatched: no payment has this UTR' "
+              "WHEN p.amount != b.credit THEN 'amount differs: ' || p.amount || ' recorded' ELSE 'matched' END AS status "
+              "FROM v_bank_statement b LEFT JOIN v_payments p ON p.reference = b.utr WHERE status != 'matched' "
+              "UNION ALL SELECT p.paid_on, 'Payment recorded for ' || p.student_name, p.amount, p.reference, "
+              "'recorded but not in the bank statement' FROM v_payments p WHERE p.method IN ('UPI', 'bank_transfer') "
+              "AND p.paid_on >= (SELECT MIN(txn_date) FROM v_bank_statement) "
+              "AND p.reference NOT IN (SELECT utr FROM v_bank_statement WHERE utr IS NOT NULL) ORDER BY 1")
+_OVERDUE_GROUPED = ("SELECT student_id, student_name AS name, student_phone AS phone, batch_code, MIN(due_date) AS due_date, "
+                    "SUM(balance) AS amount_due FROM v_instalments WHERE status IN ('overdue', 'partial') "
+                    "AND due_date < '{today}' GROUP BY student_id ORDER BY amount_due DESC")
+EXTRA: list[dict] = [
+    dict(id="x_due_total", topic="Fees", q="What is the total EMI amount due this week?",
+         alt=["total emi amount due between two dates", "how much emi is due this week in total", "total amount due this week",
+              "total emi amount due between dates in october"],
+         sql="SELECT COUNT(*) AS emis_due, SUM(balance) AS total_due FROM v_instalments WHERE status != 'paid' "
+             "AND due_date BETWEEN '{today}' AND '{week_end}'",
+         why="Number and total of unpaid EMIs due this week."),
+    dict(id="x_overdue_total", topic="Fees", q="What is the total overdue EMI amount right now?",
+         alt=["total overdue amount", "how much is overdue in total", "overdue fees total"],
+         sql="SELECT COUNT(*) AS overdue_emis, SUM(balance) AS total_overdue, "
+             "SUM(CASE WHEN status = 'overdue' THEN balance ELSE 0 END) AS fully_unpaid_overdue, "
+             "SUM(CASE WHEN status = 'partial' THEN balance ELSE 0 END) AS partly_paid_balance FROM v_instalments "
+             "WHERE status IN ('overdue', 'partial') AND due_date < '{today}'",
+         why="Total overdue balance, split into unpaid EMIs and the rest of partly paid EMIs."),
+    dict(id="x_at_risk", topic="Students", q="Who is at risk of dropping out, and why?",
+         alt=["students at risk", "dropout risk", "who might drop out", "students falling behind with reasons"],
+         sql=_RISK, trainer=_RISK_T,
+         why="Students with low attendance, recent absences, overdue EMIs or missing assignments, with the reasons."),
+    dict(id="x_seat_check", topic="Students", q="Can I add a 9th online student to the Python Evening batch?",
+         alt=["can b02 take one more online student", "is there an online seat in python evening",
+              "add one more online student to a batch"],
+         sql="SELECT code, short_name, online_seat_limit, online_students, online_seat_limit - online_students AS online_seats_left, "
+             "CASE WHEN online_students >= online_seat_limit THEN 'No: the online seat limit is reached, the batch is full' "
+             "ELSE 'Yes: ' || (online_seat_limit - online_students) || ' online seat(s) left' END AS can_add_online "
+             "FROM v_batches WHERE short_name = 'Python Evening'",
+         trainer="SELECT code, short_name, online_seat_limit, online_students, online_seat_limit - online_students "
+                 "AS online_seats_left FROM t_my_batches WHERE short_name = 'Python Evening'",
+         why="Online seats used and left in Python Evening (B02)."),
+    dict(id="x_batch_low_att", topic="Attendance & academics",
+         q="Which students in the Python Evening batch have attendance below 75%?",
+         alt=["low attendance in one batch", "b02 students below 75 percent attendance"],
+         sql="SELECT student_name, batch_code, classes_held, classes_attended, attendance_pct FROM v_certificate_eligibility "
+             "WHERE batch_code = 'B02' AND enrollment_status = 'active' AND attendance_pct < 75 ORDER BY attendance_pct",
+         trainer="SELECT student_name, batch_code, COUNT(*) AS classes_held, SUM(status != 'absent') AS attended, "
+                 "ROUND(100.0 * SUM(status != 'absent') / COUNT(*), 1) AS attendance_pct FROM t_my_attendance "
+                 "WHERE batch_code = 'B02' GROUP BY student_id HAVING attendance_pct < 75 ORDER BY attendance_pct",
+         why="Python Evening (B02) students under 75% attendance."),
+    dict(id="x_missed3", topic="Attendance & academics", q="Which students in Java Morning have missed 3 or more classes?",
+         alt=["who missed three classes in b01", "students with 3 absences in a batch"],
+         sql="SELECT student_name, batch_code, SUM(status = 'absent') AS classes_missed, COUNT(*) AS classes_held "
+             "FROM v_attendance WHERE batch_code = 'B01' GROUP BY student_id HAVING classes_missed >= 3 "
+             "ORDER BY classes_missed DESC",
+         trainer="SELECT student_name, batch_code, SUM(status = 'absent') AS classes_missed, COUNT(*) AS classes_held "
+                 "FROM t_my_attendance WHERE batch_code = 'B01' GROUP BY student_id HAVING classes_missed >= 3 "
+                 "ORDER BY classes_missed DESC",
+         why="Java Morning (B01) students with 3 or more absences."),
+    dict(id="x_roster", topic="Students", q="Who is enrolled in the new Java Evening batch?",
+         alt=["students in batch b07", "list the students of a batch", "who has joined the new batch"],
+         sql="SELECT student_name, learning_mode, enrolled_on FROM v_enrollments WHERE batch_code = 'B07' "
+             "AND status = 'active' ORDER BY student_name",
+         why="Students enrolled in Java Evening (B07), which starts soon."),
+    dict(id="x_my_week", topic="Today & timetable", q="What is my teaching schedule this week?",
+         alt=["my classes this week", "my lectures this week", "where do I teach this week"],
+         sql="", trainer="SELECT class_date, day_name, start_time, end_time, batch_code, course_name, room_name "
+                         "FROM t_my_schedule WHERE class_date BETWEEN '{today}' AND '{week_end}' ORDER BY class_date, start_time",
+         why="Your classes from today to the same day next week, with rooms."),
+    dict(id="x_cert_status", topic="Reminders & certificates", q="Which students are eligible for a completion certificate?",
+         alt=["certificate eligible students accounts", "who qualifies for the certificate"],
+         sql="SELECT student_name, batch_code, course_name, fees, eligible, certificate_no FROM v_certificate_status "
+             "WHERE batch_status = 'completed' ORDER BY eligible DESC, student_name",
+         why="Finished batches: who qualifies for a certificate (attendance at least 75% and fees paid)."),
+    dict(id="x_reconcile", topic="Fees", q="Reconcile the bank statement against expected instalments.",
+         alt=["reconcile last month's bank statement", "bank reconciliation", "match bank credits with payments"],
+         sql=_RECONCILE,
+         why="Bank lines that need a look (duplicates, unmatched, amount differences, interest) and payments missing "
+             "from the bank."),
+    dict(id="x_parent_msg", topic="Reminders & certificates",
+         q="Draft a WhatsApp message to Vivek Joshi's parent about his recent absences.",
+         alt=["message the parent about absences", "tell the parents their child is absent", "whatsapp the guardian"],
+         sql="SELECT s.id AS student_id, s.name, s.parent_name, s.guardian_phone AS phone, e.batch_code, "
+             "SUM(a.status = 'absent') AS absences FROM v_students s JOIN v_enrollments e ON e.student_id = s.id "
+             "AND e.status = 'active' JOIN v_attendance a ON a.student_id = s.id AND a.batch_id = e.batch_id "
+             "AND a.session_date >= date('{today}', '-21 days') WHERE s.name LIKE '%Vivek Joshi%' GROUP BY s.id, e.batch_id",
+         plan={"type": "action", "action_type": "send_whatsapp", "title": "Absence note to parent",
+               "message_template": "Namaste {parent_name}, this is {institute}. {name} has missed {absences} classes in "
+                                   "{batch_code} over the last three weeks. Is everything all right? Recordings are on the "
+                                   "portal, and we are happy to help {name} catch up. Thank you!"},
+         why="A message to Vivek Joshi's parent about his absences in the last three weeks."),
+    dict(id="x_remind_owing", topic="Reminders & certificates", q="Send a reminder to everyone who owes money right now.",
+         alt=["remind all defaulters", "whatsapp everyone with overdue fees", "remind everyone who has not paid"],
+         sql=_OVERDUE_GROUPED,
+         plan={"type": "action", "action_type": "send_whatsapp", "title": "Overdue EMI reminder",
+               "message_template": "Hi {name}, a gentle reminder from {institute}: ₹{amount_due} of your fees for "
+                                   "{batch_code} has been due since {due_date}. Please pay at your earliest convenience, or "
+                                   "reply here if you need help. Thank you!"},
+         why="Everyone with an overdue EMI, one message each with the total overdue."),
+    dict(id="x_mark_all_paid", topic="Fees", q="Mark all of Rohan Gupta's unpaid EMIs as paid.",
+         alt=["mark a student's emis paid", "set his fees as paid"],
+         sql="SELECT id AS instalment_id, student_name, instalment_no, due_date, balance FROM v_instalments "
+             "WHERE student_name LIKE '%Rohan Gupta%' AND status != 'paid' ORDER BY due_date",
+         plan={"type": "action", "action_type": "mark_instalment_paid", "title": "Mark Rohan Gupta's EMIs paid"},
+         why="Rohan Gupta's unpaid instalments, to be marked paid after approval."),
+    dict(id="x_bank_payment", topic="Fees", q="Record the ₹11,000 UPI credit from Suresh Gupta as Rohan Gupta's August EMI.",
+         alt=["mark the money from a parent as the student's emi", "record a parent's upi payment"],
+         sql="SELECT txn_date, description, credit, utr FROM v_bank_statement WHERE credit = 11000 "
+             "AND lower(description) LIKE '%suresh gupta%'",
+         plan={"type": "action", "action_type": "record_payment", "student_name": "Rohan Gupta", "instalment_no": 2,
+               "amount": 11000, "method": "UPI"},
+         why="Record the parent's UPI credit against Rohan Gupta's EMI 2 (the reference is matched from the bank)."),
+]
+ALL = BANK + EXTRA
 
 # What people usually ask next. Sentences in ACTION_NEXT prepare an approval preview (role-checked).
 REMIND_OVERDUE = "Send a WhatsApp reminder for overdue EMIs"
@@ -338,7 +481,8 @@ def plan_for(entry: dict, role: str, institute: str = "the institute") -> dict |
     plan = {"type": "query", "sql": _fill(sql, d), "explanation": _fill(entry["why"], d)}
     if entry.get("plan"):
         plan.update(entry["plan"])
-        plan["message_template"] = plan["message_template"].replace("{institute}", institute)
+        if "message_template" in plan:
+            plan["message_template"] = plan["message_template"].replace("{institute}", institute)
     return plan
 
 
@@ -381,7 +525,7 @@ def _words(text: str) -> set[str]:
     return out
 
 
-_INDEX = [(e, [_words(e["q"])] + [_words(a) for a in e.get("alt", [])]) for e in BANK]
+_INDEX = [(e, [_words(e["q"])] + [_words(a) for a in e.get("alt", [])]) for e in ALL]
 
 
 def _scores(question: str, entry_words: list[set[str]]) -> tuple[float, float]:
@@ -407,7 +551,7 @@ def closest(question: str, role: str, k: int = 4) -> list[tuple[float, dict]]:
     return hits[:k]
 
 
-def prompt_examples(question: str, role: str, institute: str, k: int = 4) -> str:
+def prompt_examples(question: str, role: str, institute: str, k: int = 3) -> str:
     """Worked examples for the LLM prompt: the closest checked questions and their answers."""
     lines = []
     for _, e in closest(question, role, k):

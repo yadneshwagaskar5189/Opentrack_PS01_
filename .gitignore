@@ -7,3 +7,5 @@ __pycache__/
 .venv/
 venv/
 .audit_key
+tester_kit/results.csv
+tester_kit/report.md

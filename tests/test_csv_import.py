@@ -223,7 +223,9 @@ def test_copilot_makes_entry_previews(who, question, kind):
 
 
 def test_copilot_entry_refused_outside_role():
-    assert copilot.ask(user(RAHUL), "Mark attendance for B03 today")["answer"].startswith("I couldn't prepare that")
+    out = copilot.ask(user(RAHUL), "Mark attendance for B03 today")       # not his batch: refused before any preview
+    assert out["type"] in ("refusal", "answer") and not out.get("action")
+    assert out["answer"].startswith(("I couldn't prepare that", "You can only see your own batches"))
     assert copilot.ask(user(ACCOUNTS), "Add Riya Shah, 9876543210 to B01")["type"] == "refusal"
 
 

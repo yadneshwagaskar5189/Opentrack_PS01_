@@ -11,7 +11,7 @@ OBJECT_DOCS = {
     "v_courses_with_fee": "Courses with total fee in rupees.",
     "v_rooms": "Classrooms, seat capacity and whether they have a projector (1/0).",
     "v_trainers_public": "Trainers and their skills (comma list; a skill word in a course name means they can teach it).",
-    "v_batches": "Batches: code (e.g. B01), batch_name, course, trainer, mode (classroom/online/hybrid), time_window, usual days/start_time/end_time, online_seat_limit, current online_students and classroom_students, dates, status active/upcoming/completed.",
+    "v_batches": "Batches: code (e.g. B01), batch_name, short_name (what staff call it, e.g. 'Java Morning', 'Python Evening'; match a batch by short_name or code), course, trainer, mode (classroom/online/hybrid), time_window, usual days/start_time/end_time, online_seat_limit, current online_students and classroom_students, dates, status active/upcoming/completed.",
     "v_timetable": "The planning week's timetable (dates in the prompt). day_of_week 0=Mon..6=Sun, hours on 24h clock (19.5 = 19:30), is_online=1 uses an online licence.",
     "v_schedule": "Every class by date, past and future: class_date, day_name, start_time/end_time (HH:MM), batch_code, course_name, trainer_name (who takes it, incl. substitutes), room_name, status held/cancelled/scheduled, topic, trainer_on_leave (1/0). Use for today's/tomorrow's lectures and who teaches them.",
     "v_students": "Students with phone (+91...), email, city, parent_name, guardian_phone (parent's phone).",
@@ -25,6 +25,7 @@ OBJECT_DOCS = {
     "v_fee_plans": "Fee plan per enrollment: full or emi, total, discount, number of instalments.",
     "v_payments": "Payments received: amount, date, method (UPI/bank_transfer/cash/card), reference (UPI ref/UTR or cash receipt no.).",
     "v_bank_statement": "Bank statement credits: txn_date, description (e.g. 'UPI/<utr>/<payer name>'), credit, utr. A fee payment matches when utr = v_payments.reference.",
+    "v_certificate_status": "One row per enrollment: student_name, batch_code, course_name, batch_status, fees (paid/pending), eligible (1/0: attendance >= 75% AND fees paid), certificate_no. No attendance numbers.",
     "v_certificate_eligibility": "One row per enrollment: classes_held, classes_attended, attendance_pct, fee_balance, eligible (1/0) and reason. Rule: attendance >= 75% AND fees fully paid. certificate_no is set once issued.",
     "trainers": "Trainers with email and phone.",
     "trainer_availability": "Weekly availability per trainer: day_of_week 0=Mon..6=Sun, start_hour, end_hour.",
@@ -32,7 +33,7 @@ OBJECT_DOCS = {
     "certificates": "Completion certificates issued per enrollment.",
     "messages_outbox": "Messages sent after human approval.",
     "audit_log": "Every copilot question, query, refusal and approved action.",
-    "t_my_batches": "Your batches only, with usual days and times and online/classroom student counts.",
+    "t_my_batches": "Your batches only (code, batch_name, short_name e.g. 'Java Morning'), with usual days and times and online/classroom student counts.",
     "t_my_students": "Students in your batches (no phone numbers, no fee data).",
     "t_my_sessions": "Classes of your batches.",
     "t_my_attendance": "Attendance in your batches. 'Missed a class' means status='absent'.",
@@ -50,7 +51,7 @@ ROLES = {
             "v_students", "v_enrollments", "v_batches", "v_courses_with_fee", "v_trainers_public",
             "v_rooms", "v_class_sessions", "v_attendance", "v_assignments", "v_submissions",
             "v_recordings", "v_instalments", "v_fee_plans", "v_payments", "v_timetable", "v_schedule",
-            "v_bank_statement", "v_certificate_eligibility",
+            "v_bank_statement", "v_certificate_eligibility", "v_certificate_status",
             "trainers", "trainer_availability", "trainer_leaves", "certificates",
             "messages_outbox", "audit_log",
         ],
@@ -73,7 +74,7 @@ ROLES = {
         "label": "Accounts",
         "objects": [
             "v_students", "v_enrollments", "v_batches", "v_courses_with_fee",
-            "v_instalments", "v_fee_plans", "v_payments", "v_bank_statement",
+            "v_instalments", "v_fee_plans", "v_payments", "v_bank_statement", "v_certificate_status",
         ],
         "actions": ["send_whatsapp", "mark_instalment_paid", "record_payment"],
         "can_see_fees": True,
@@ -101,9 +102,9 @@ def can_propose(role: str, action_type: str) -> bool:
 # What each role is NOT allowed to see, stated plainly for refusals.
 ROLE_RESTRICTIONS = {
     "owner": "Owners can see everything except login credentials.",
-    "counselor": "Counselors cannot see payment transaction references, the bank statement, the audit log or trainer contact details.",
+    "counselor": "Counselors cannot see payments received, collection totals, payment references, the bank statement, the audit log or trainer contact details.",
     "accounts": "Accounts staff cannot see attendance, assignments, recordings or timetables.",
-    "trainer": "Trainers can only see their own batches and students, and can never see fees, payments, EMIs or student phone numbers.",
+    "trainer": "Trainers can see attendance, assignments and recordings for their own batches only, and can never see fees, payments, EMIs or student phone numbers.",
 }
 
 ACTION_DOCS = {

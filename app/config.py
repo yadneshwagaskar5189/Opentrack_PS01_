@@ -29,6 +29,10 @@ LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://api.groq.com/openai/v1")
 LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 LLM_MODEL = os.getenv("LLM_MODEL", "openai/gpt-oss-120b")
 LLM_TIMEOUT_S = float(os.getenv("LLM_TIMEOUT_S", "30"))
+# gpt-oss models think before answering; "low" keeps answers fast and uses far fewer tokens (free tiers count them).
+LLM_REASONING_EFFORT = os.getenv("LLM_REASONING_EFFORT", "low")
+# When the provider says "too many requests" (HTTP 429), wait up to this many seconds and try again.
+LLM_RETRY_MAX_WAIT_S = float(os.getenv("LLM_RETRY_MAX_WAIT_S", "25"))
 
 QUERY_TIMEOUT_MS = int(os.getenv("QUERY_TIMEOUT_MS", "3000"))
 MAX_ROWS = int(os.getenv("MAX_ROWS", "200"))
